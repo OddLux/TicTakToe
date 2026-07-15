@@ -1,0 +1,5 @@
+# Personal scratchpad -- not tracked
+_playground/
+
+# Generated mirror of .agents/ -- never edit directly
+.claude/

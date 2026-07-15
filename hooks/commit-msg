@@ -1,0 +1,23 @@
+#!/bin/sh
+# Changelog gate: feature/bugfix/refactor commits must stage CHANGELOG.md.
+# Installed via: git config core.hooksPath hooks
+# Run scripts/install_hooks.py to configure automatically.
+
+commit_msg_file="$1"
+first_line=$(head -1 "$commit_msg_file")
+
+# Match feature/bugfix/refactor with optional scope and breaking marker
+if echo "$first_line" | grep -qE '^(feature|bugfix|refactor)(!)?(\([^)]+\))?:'; then
+    if ! git diff --cached --name-only | grep -q "CHANGELOG.md"; then
+        echo ""
+        echo "  Changelog gate: CHANGELOG.md not staged."
+        echo "  Commits of type feature/bugfix/refactor require an [Unreleased]"
+        echo "  entry in CHANGELOG.md to be staged alongside this change."
+        echo ""
+        echo "  Add your entry under ## [Unreleased] and re-run git commit."
+        echo ""
+        exit 1
+    fi
+fi
+
+exit 0
