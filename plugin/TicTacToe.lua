@@ -245,7 +245,7 @@ local ui = {
     dialog = nil, -- our BaseInput handle (owned subtree root)
     status = nil, -- status-line text object
     cells = {}, -- 9 cell button handles
-    stroke_layer = nil, -- parent of all stroke blocks
+    stroke_blocks = {}, -- win-line block handles (direct children of dialog)
 }
 
 -- =====================================================================
@@ -408,43 +408,120 @@ end
 -- ---------------------------------------------------------------------
 -- MA3 has no reliable arbitrary-rotation primitive, so we render an angled
 -- (or bent) stroke by rasterizing the polyline into many small overlapping
--- axis-aligned blocks. All blocks are children of one StrokeLayer so the
--- whole stroke tears down with a single parent delete on restart.
+-- axis-aligned blocks.
+--
+-- Blocks are DIRECT CHILDREN OF THE DIALOG, positioned in the same absolute
+-- coordinate space as the 9 cells. This is deliberate. An earlier revision
+-- parented them to a dedicated "StrokeLayer" container, which caused two
+-- problems on-console (2026-07-16):
+--   * sized to the full grid, the layer sat on top of the board and was a
+--     prime suspect for occluding it;
+--   * shrunk to W=0/H=0 to avoid that, it would instead clip every child
+--     block -- i.e. the win line would render nothing at all.
+-- Direct dialog children at absolute X/Y are the ONE layout mechanism
+-- confirmed working on this build: the 9 cells use exactly that and their
+-- 480x480 footprint is visible in on-console screenshots. So the stroke
+-- uses the same mechanism. Teardown tracks handles in ui.stroke_blocks
+-- instead of relying on a single parent delete.
 --
 -- Fallback chain (degrade SILENTLY, never error):
 --   1. sampled stroke  (primary)
 --   2. elbow bars      (axis-aligned rects through cell centers)
 -- The winner banner text is NOT part of this chain: it always renders.
---
--- NO CUSTOM COLOR on stroke blocks/bars either -- see the SECTION 4 comment.
--- Blocks/bars render with MA3's default button skin (confirmed visible via
--- the Restart button, which never touched BackColor). A former "strategy 3"
--- (recolor the winning cells) relied on the exact same broken BackColor
--- mechanism that blanked the grid, so it has been removed rather than kept
--- as a fallback that could never actually work.
 -- =====================================================================
 
--- Geometry of the drawing surface, in the StrokeLayer's local pixel space.
--- These are layout guesses; the renderer stays visually sensible for any
--- reasonable values because it works in normalized cell units then scales.
-local GRID_PX = 480 -- assumed pixel size of the 3x3 grid area
+-- Layout, all in the dialog's absolute coordinate space. Every child gets
+-- explicit geometry derived from these -- nothing is left to default
+-- placement (see the status-line note in SECTION 10).
+--
+--   grid    : y  40 .. 520   (GRID_Y .. GRID_Y + GRID_PX)
+--   status  : y 528 .. 568
+--   restart : y 576 .. 624
+--   dialog H = 640, so everything fits with room for the title bar.
+local GRID_PX = 480 -- pixel size of the 3x3 grid area
 local CELL_PX = GRID_PX / 3
+local GRID_Y = 40 -- top of the grid, in dialog space
+local STATUS_Y = GRID_Y + GRID_PX + 8 -- 528, directly under the grid
+local STATUS_H = 40
+local RESTART_Y = STATUS_Y + STATUS_H + 8 -- 576, under the status line
+local RESTART_H = 48
 local BLOCK_MIN = 8 -- block edge in px
 local BLOCK_MAX_COUNT = 48 -- hard cap on total blocks
 
--- Convert a cell index to a pixel center inside the stroke layer.
+-- Convert a cell index to its pixel center in the DIALOG's coordinate space
+-- (same space the cell buttons are laid out in).
 local function cell_center_px(idx)
     local cx, cy = cell_center_units(idx)
-    return cx * CELL_PX, cy * CELL_PX
+    return cx * CELL_PX, cy * CELL_PX + GRID_Y
 end
 
--- Place one small square block centered at (px, py) under the stroke layer.
+-- ---------------------------------------------------------------------
+-- Stroke color, resolved ONCE, READ-ONLY, and entirely optional.
+--
+-- The on-console error "Could not resolve object address for 0.12,0.12,0.12,1"
+-- is the engine saying BackColor wants an OBJECT ADDRESS, not an "r,g,b,a"
+-- string. A color that ALREADY EXISTS in the show's color theme is such an
+-- object, so referencing one is a pure read -- we look one up and reuse its
+-- handle. We never call :Acquire() and never create/modify a color, so no
+-- show data is mutated (that distinction is what makes this in-bounds where
+-- the documented Acquire() recipe is not).
+--
+-- Blast radius is contained ON PURPOSE: the resolved color is applied ONLY
+-- to stroke blocks, never to cells. If this still misbehaves on some build,
+-- the worst case is an invisible win line -- the board itself cannot be
+-- blanked by it, which is the failure we already paid for once.
+-- ---------------------------------------------------------------------
+local stroke_color = nil -- handle or nil; resolved lazily, never created
+
+local function resolve_stroke_color()
+    local found = nil
+    pcall(function()
+        local grp = Root().ColorTheme.ColorGroups.Global
+        if grp == nil then
+            return
+        end
+        local count = grp.Count and grp:Count() or 0
+        -- Prefer a name that reads as a highlight; otherwise take the first
+        -- color that exists. Names vary by build, so this is best-effort.
+        local preferred = { "select", "highlight", "mark", "warn", "active" }
+        local first = nil
+        for k = 1, count do
+            local col = grp:Ptr(k)
+            if col ~= nil then
+                first = first or col
+                local name = tostring(col.Name or ""):lower()
+                for _, want in ipairs(preferred) do
+                    if name:find(want, 1, true) then
+                        found = col
+                        return
+                    end
+                end
+            end
+        end
+        found = first
+    end)
+    return found
+end
+
+-- Apply the stroke color to one block, if we managed to resolve one.
+-- Assigning the HANDLE (not a string) is the form shown to work in the MA3
+-- community docs: `button.backcolor = <color object>`.
+local function apply_stroke_color(obj)
+    if obj == nil or stroke_color == nil then
+        return
+    end
+    pcall(function()
+        obj.BackColor = stroke_color
+    end)
+end
+
+-- Place one small square block centered at (px, py) in dialog space.
 -- Returns true on success. Purely additive to our own subtree.
 local function place_block(px, py, size)
-    if ui.stroke_layer == nil then
+    if ui.dialog == nil then
         return false
     end
-    local block = safe_append(ui.stroke_layer, "Button")
+    local block = safe_append(ui.dialog, "Button")
     if block == nil then
         return false
     end
@@ -456,12 +533,14 @@ local function place_block(px, py, size)
     safe_set(block, "Text", "")
     -- non-interactive: swallow clicks harmlessly if the property exists
     safe_set(block, "Enabled", false)
+    apply_stroke_color(block)
+    ui.stroke_blocks[#ui.stroke_blocks + 1] = block
     return true
 end
 
 -- Strategy 1: rasterize the polyline (list of cell indices) into blocks.
 local function render_sampled_stroke(path)
-    if ui.stroke_layer == nil or #path < 2 then
+    if ui.dialog == nil or #path < 2 then
         return false
     end
     -- Build the list of pixel points along the polyline.
@@ -507,14 +586,14 @@ end
 -- Strategy 2: elbow bars -- axis-aligned rectangles between consecutive
 -- cell centers. Coarser than the sampled stroke but near-certain to render.
 local function render_elbow_bars(path)
-    if ui.stroke_layer == nil or #path < 2 then
+    if ui.dialog == nil or #path < 2 then
         return false
     end
     local any = false
     for seg = 1, #path - 1 do
         local x1, y1 = cell_center_px(path[seg])
         local x2, y2 = cell_center_px(path[seg + 1])
-        local bar = safe_append(ui.stroke_layer, "Button")
+        local bar = safe_append(ui.dialog, "Button")
         if bar ~= nil then
             local thick = 10
             local left = math.min(x1, x2) - thick / 2
@@ -525,27 +604,24 @@ local function render_elbow_bars(path)
             safe_set(bar, "Y", top)
             safe_set(bar, "W", wide)
             safe_set(bar, "H", tall)
+            safe_set(bar, "Text", "")
             safe_set(bar, "Enabled", false)
+            apply_stroke_color(bar)
+            ui.stroke_blocks[#ui.stroke_blocks + 1] = bar
             any = true
         end
     end
     return any
 end
 
--- Tear down the stroke: delete the StrokeLayer's children. We delete only
--- within our own subtree.
+-- Tear down the stroke: delete every block we created. We track handles
+-- explicitly (rather than enumerating a parent's children) so we only ever
+-- delete objects this plugin made.
 local function clear_stroke()
-    if ui.stroke_layer == nil then
-        return
+    for idx = #ui.stroke_blocks, 1, -1 do
+        safe_delete(ui.stroke_blocks[idx])
+        ui.stroke_blocks[idx] = nil
     end
-    -- Prefer deleting children individually; fall back to nothing (silent).
-    pcall(function()
-        local count = ui.stroke_layer.Count and ui.stroke_layer:Count() or 0
-        for k = count, 1, -1 do
-            local child = ui.stroke_layer:Ptr(k)
-            safe_delete(child)
-        end
-    end)
 end
 
 -- Draw the win stroke for an outcome using the fallback chain.
@@ -560,7 +636,7 @@ local function draw_win_stroke(outcome)
         return
     end
     clear_stroke()
-    -- 1 -> 2 fallback chain, silent degrade. If both fail (e.g. stroke_layer
+    -- 1 -> 2 fallback chain, silent degrade. If both fail (e.g. the dialog
     -- itself could not be built), the winner banner text still renders.
     if render_sampled_stroke(path) then
         return
@@ -650,8 +726,9 @@ local function teardown()
     safe_delete(ui.dialog) -- own-subtree teardown ONLY
     ui.dialog = nil
     ui.status = nil
-    ui.stroke_layer = nil
     ui.cells = {}
+    ui.stroke_blocks = {}
+    stroke_color = nil -- do not hold a handle across instances
 end
 
 -- =====================================================================
@@ -735,9 +812,20 @@ local function build_ui()
     -- is not a verified class name and was silently producing a nil handle,
     -- which is why the status text never appeared during on-console testing
     -- 2026-07-16). Non-interactive: Enabled=false.
+    --
+    -- Geometry is set EXPLICITLY. It previously had none, and an unpositioned
+    -- child appears to default to filling its parent: on-console the status
+    -- text rendered dead-centre of the dialog, i.e. a full-size button laid
+    -- over the board. Every child gets explicit X/Y/W/H for that reason.
     ui.status = safe_append(dialog, "Button")
-    safe_set(ui.status, "Text", status_text())
-    safe_set(ui.status, "Enabled", false)
+    if ui.status ~= nil then
+        safe_set(ui.status, "X", 0)
+        safe_set(ui.status, "Y", STATUS_Y)
+        safe_set(ui.status, "W", GRID_PX)
+        safe_set(ui.status, "H", STATUS_H)
+        safe_set(ui.status, "Text", status_text())
+        safe_set(ui.status, "Enabled", false)
+    end
 
     -- 3x3 grid of cell buttons. NO BackColor here -- see SECTION 4 comment;
     -- a raw "r,g,b,a" string on BackColor made MA3 try to resolve it as an
@@ -746,42 +834,28 @@ local function build_ui()
         local cell = safe_append(dialog, "Button")
         ui.cells[idx] = cell
         if cell ~= nil then
-            -- layout (best-effort; harmless if the props differ)
+            -- Absolute layout. Confirmed working on-console: the resulting
+            -- 480x480 grid footprint is visible in screenshots.
             safe_set(cell, "X", cell_col(idx) * CELL_PX)
-            safe_set(cell, "Y", cell_row(idx) * CELL_PX + 40)
+            safe_set(cell, "Y", cell_row(idx) * CELL_PX + GRID_Y)
             safe_set(cell, "W", CELL_PX - 6)
             safe_set(cell, "H", CELL_PX - 6)
             wire_click(cell, "TttCell" .. idx)
         end
     end
 
-    -- Stroke layer: a coordinate anchor + teardown parent for win-line
-    -- blocks, NOT a visible surface. Appended after the cells, so if MA3
-    -- renders later siblings on top and gives Button any default opaque
-    -- fill, a FULL-GRID-SIZED layer here would blank out the entire board
-    -- at all times -- a strong candidate for exactly the single blank
-    -- rectangle seen in on-console testing 2026-07-16. W/H are deliberately
-    -- 0 so the layer itself can never occlude anything; children are still
-    -- positioned via their own absolute X/Y (see cell_center_px) and are
-    -- expected to render regardless of the parent's own empty bounds.
-    ui.stroke_layer = safe_append(dialog, "Button")
-    if ui.stroke_layer ~= nil then
-        safe_set(ui.stroke_layer, "Enabled", false)
-        safe_set(ui.stroke_layer, "X", 0)
-        safe_set(ui.stroke_layer, "Y", 40)
-        safe_set(ui.stroke_layer, "W", 0)
-        safe_set(ui.stroke_layer, "H", 0)
-        safe_set(ui.stroke_layer, "Text", "")
-    end
+    -- Resolve the win-stroke color once, read-only (see SECTION 5). May stay
+    -- nil, in which case the stroke still renders, just uncolored.
+    stroke_color = resolve_stroke_color()
 
     -- Restart button.
     local restart = safe_append(dialog, "Button")
     if restart ~= nil then
         safe_set(restart, "Text", "Restart")
         safe_set(restart, "X", 0)
-        safe_set(restart, "Y", GRID_PX + 48)
+        safe_set(restart, "Y", RESTART_Y)
         safe_set(restart, "W", GRID_PX)
-        safe_set(restart, "H", 48)
+        safe_set(restart, "H", RESTART_H)
         wire_click(restart, "TttRestart")
     end
 

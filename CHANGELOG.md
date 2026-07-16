@@ -17,6 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   game-tree rig proof: 255168 games, speaker wins 0, draws 0, bulb 100%), and
   `docs/INSTALL.md`.
 
+### Added
+
+- `plugin/test_ui_geometry.lua` -- headless test for the UI layer, which
+  previously had NO coverage at all (`test_logic.lua` only mirrors the pure
+  game logic). It loads the real `TicTacToe.lua` against a stubbed grandMA3
+  object model and asserts the widget tree it builds: every child has
+  explicit geometry, the 9 cells tile the grid, status/restart sit below the
+  board rather than over it, win strokes land on the winning line within the
+  grid and respect the 48-block cap, restart clears them, re-activation is
+  idempotent, and a speaker 3-in-a-row is ignored in favour of a bulb win.
+  This gap is what let a Lua syntax error and the blank-board layout bugs
+  reach the console.
+
 ### Fixed
 
 - Correct a Lua syntax error in `plugin/TicTacToe.lua` (`stroke_layer:Count`
@@ -44,3 +57,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   texture and no text. Removed the icon/`Texture` attempt entirely; symbols
   now go straight to the emoji glyph (falling back to a plain letter),
   since `Text` is the one property confirmed to render correctly.
+- Fix the win line (the plugin's centerpiece) never being visible, found by
+  a full code audit. Three compounding defects: (a) the win-stroke layer had
+  been shrunk to `W=0/H=0` to stop it occluding the board, which would
+  instead have clipped every stroke block it parented; (b) with all custom
+  color removed, gray blocks drawn on gray cells would have been invisible
+  even unclipped; (c) the status line had no explicit geometry at all and
+  appears to have defaulted to filling the dialog, laying a full-size button
+  over the board. Stroke blocks are now direct children of the dialog at
+  absolute coordinates -- the one layout mechanism confirmed working
+  on-console (the cells use it) -- tracked in a handle list for teardown
+  rather than via a parent container. Every child now gets explicit
+  geometry from a single coherent layout block, with status and restart
+  positioned below the grid.
+- Restore win-line color safely. `Could not resolve object address` was the
+  engine reporting that `BackColor` expects an object address; a color that
+  already exists in the show's color theme is one. The plugin now looks up
+  an existing theme color read-only and assigns its handle -- it never calls
+  `:Acquire()` and never creates or modifies a color, so no show data is
+  mutated. The lookup is applied ONLY to stroke blocks, so if it misbehaves
+  on some build the worst case is an invisible line, never a blanked board.
