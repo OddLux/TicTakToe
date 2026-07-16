@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix cell symbols never rendering and the win line surviving Restart, both
+  found in on-console testing 2026-07-16 with an official grandMA3 2.3
+  HelpLua function dump available for verification. Two separate root
+  causes: (1) emoji glyphs never appeared even though moves registered
+  correctly internally -- plain ASCII text (`"Restart"`, status line) does
+  render, so the UI font most likely lacks emoji glyphs or chokes on the
+  4-byte UTF-8 encoding; letters (`L`/`S`) are now the primary symbol, not a
+  fallback. (2) every stroke-block deletion was failing, spamming System
+  Monitor with hundreds of identical errors and leaving the win line on
+  screen through Restart -- the HelpLua dump confirms object creation is
+  PARENT-indexed (`Append(parent, class, undo, count)`), and the exact
+  signature MA3 echoes back on a bad call matches a PARENT-indexed
+  `Delete(parent, child_index, undo)`. The previous code called
+  `child:Delete()` with no arguments, which is wrong for this API shape.
+  Deletion is now resolved by searching for the child's exact index among
+  its parent's children (`GetUIChildrenCount`/`GetUIChild`, the documented
+  UI-tree functions, distinct from the generic Object API's `Count()`/
+  `Ptr()` used elsewhere for the read-only color-theme lookup) rather than
+  assuming "last child" -- required because the dialog's own parent is the
+  SHARED screen overlay, where another open dialog could otherwise be
+  destroyed by a wrong assumption. `plugin/test_ui_geometry.lua` gained a
+  test that proves this directly: it places a second, unrelated dialog on
+  the same fake overlay and asserts closing ours never touches it.
+
 ### Added
 
 - Rigged Tic Tac Toe plugin for grandMA3 2.x (`plugin/TicTacToe.lua`,
