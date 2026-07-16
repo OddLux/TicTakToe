@@ -342,9 +342,18 @@ end
 -- =====================================================================
 -- SECTION 4 -- SYMBOL / GLYPH RESOLUTION
 -- ---------------------------------------------------------------------
--- Prefer MA3 built-in icons; fall back to emoji, then to a colored letter.
--- Icon names are unverified, so we ONLY ever set them via safe_set. The
--- letter fallback (with color) is guaranteed to render on any font.
+-- Prefer MA3 built-in icons; fall back to emoji, then to a plain letter.
+-- Icon names are unverified, so we ONLY ever set them via safe_set.
+--
+-- NO CUSTOM COLOR. Confirmed on-console (2026-07-16): assigning BackColor
+-- or TextColor a raw "r,g,b,a" string makes MA3's engine try to resolve it
+-- as an OBJECT ADDRESS/HANDLE ("Could not resolve object address for
+-- 0.12,0.12,0.12,1" in System Monitor), which silently breaks rendering of
+-- the widget -- this is what blanked the whole 3x3 grid. The documented-safe
+-- alternative (Root().ColorTheme.ColorGroups.Global:Acquire()) allocates a
+-- PERSISTENT color pool entry in the show, which is real show-data mutation
+-- and out of bounds per this plugin's safety contract. So: no color. The
+-- emoji glyph shape (or letter) alone distinguishes the two players.
 -- =====================================================================
 
 local SYMBOLS = {
@@ -352,13 +361,11 @@ local SYMBOLS = {
         icon = "object_light", -- unverified MA3 icon name (best guess)
         emoji = "\240\159\146\161", -- UTF-8 for U+1F4A1 light bulb
         letter = "L",
-        color = "1,0.85,0.1,1", -- yellow (r,g,b,a) -- format unverified
     },
     speaker = {
         icon = "object_audio", -- unverified MA3 icon name (best guess)
         emoji = "\240\159\148\138", -- UTF-8 for U+1F50A speaker
         letter = "S",
-        color = "0.2,0.55,1,1", -- blue
     },
 }
 
@@ -375,12 +382,10 @@ local function apply_symbol(cell, player)
     end
     -- 2. try the emoji glyph as button text
     if safe_set(cell, "Text", sym.emoji) then
-        safe_set(cell, "TextColor", sym.color)
         return
     end
-    -- 3. guaranteed fallback: a colored letter
+    -- 3. guaranteed fallback: a plain letter
     safe_set(cell, "Text", sym.letter)
-    safe_set(cell, "TextColor", sym.color)
 end
 
 local function clear_symbol(cell)
@@ -402,8 +407,14 @@ end
 -- Fallback chain (degrade SILENTLY, never error):
 --   1. sampled stroke  (primary)
 --   2. elbow bars      (axis-aligned rects through cell centers)
---   3. cell highlight  (background color on the winning cells)
 -- The winner banner text is NOT part of this chain: it always renders.
+--
+-- NO CUSTOM COLOR on stroke blocks/bars either -- see the SECTION 4 comment.
+-- Blocks/bars render with MA3's default button skin (confirmed visible via
+-- the Restart button, which never touched BackColor). A former "strategy 3"
+-- (recolor the winning cells) relied on the exact same broken BackColor
+-- mechanism that blanked the grid, so it has been removed rather than kept
+-- as a fallback that could never actually work.
 -- =====================================================================
 
 -- Geometry of the drawing surface, in the StrokeLayer's local pixel space.
@@ -435,7 +446,6 @@ local function place_block(px, py, size)
     safe_set(block, "H", size)
     safe_set(block, "X", px - size / 2)
     safe_set(block, "Y", py - size / 2)
-    safe_set(block, "BackColor", "1,0.85,0.1,1") -- bulb yellow stroke
     safe_set(block, "Text", "")
     -- non-interactive: swallow clicks harmlessly if the property exists
     safe_set(block, "Enabled", false)
@@ -508,7 +518,6 @@ local function render_elbow_bars(path)
             safe_set(bar, "Y", top)
             safe_set(bar, "W", wide)
             safe_set(bar, "H", tall)
-            safe_set(bar, "BackColor", "1,0.85,0.1,1")
             safe_set(bar, "Enabled", false)
             any = true
         end
@@ -516,23 +525,8 @@ local function render_elbow_bars(path)
     return any
 end
 
--- Strategy 3: highlight the winning cells' backgrounds. Always works because
--- it only recolors buttons we already own.
-local function render_cell_highlight(path)
-    local any = false
-    for _, idx in ipairs(path) do
-        local cell = ui.cells[idx]
-        if cell ~= nil then
-            if safe_set(cell, "BackColor", "1,0.85,0.1,1") then
-                any = true
-            end
-        end
-    end
-    return any
-end
-
--- Tear down the stroke: delete the StrokeLayer's children by re-creating a
--- fresh empty layer. We delete only within our own subtree.
+-- Tear down the stroke: delete the StrokeLayer's children. We delete only
+-- within our own subtree.
 local function clear_stroke()
     if ui.stroke_layer == nil then
         return
@@ -545,13 +539,6 @@ local function clear_stroke()
             safe_delete(child)
         end
     end)
-    -- also reset any cell highlight from strategy 3
-    for idx = 1, 9 do
-        local cell = ui.cells[idx]
-        if cell ~= nil then
-            safe_set(cell, "BackColor", "0.12,0.12,0.12,1")
-        end
-    end
 end
 
 -- Draw the win stroke for an outcome using the fallback chain.
@@ -566,14 +553,12 @@ local function draw_win_stroke(outcome)
         return
     end
     clear_stroke()
-    -- 1 -> 2 -> 3 fallback chain, silent degrade.
+    -- 1 -> 2 fallback chain, silent degrade. If both fail (e.g. stroke_layer
+    -- itself could not be built), the winner banner text still renders.
     if render_sampled_stroke(path) then
         return
     end
-    if render_elbow_bars(path) then
-        return
-    end
-    render_cell_highlight(path)
+    render_elbow_bars(path)
 end
 
 -- =====================================================================
@@ -739,11 +724,17 @@ local function build_ui()
         end
     end
 
-    -- Status line.
-    ui.status = safe_append(dialog, "UIObject")
+    -- Status line. Uses "Button" (confirmed appendable on-console; "UIObject"
+    -- is not a verified class name and was silently producing a nil handle,
+    -- which is why the status text never appeared during on-console testing
+    -- 2026-07-16). Non-interactive: Enabled=false.
+    ui.status = safe_append(dialog, "Button")
     safe_set(ui.status, "Text", status_text())
+    safe_set(ui.status, "Enabled", false)
 
-    -- 3x3 grid of cell buttons.
+    -- 3x3 grid of cell buttons. NO BackColor here -- see SECTION 4 comment;
+    -- a raw "r,g,b,a" string on BackColor made MA3 try to resolve it as an
+    -- object address and silently broke rendering (confirmed on-console).
     for idx = 1, 9 do
         local cell = safe_append(dialog, "Button")
         ui.cells[idx] = cell
@@ -753,19 +744,27 @@ local function build_ui()
             safe_set(cell, "Y", cell_row(idx) * CELL_PX + 40)
             safe_set(cell, "W", CELL_PX - 6)
             safe_set(cell, "H", CELL_PX - 6)
-            safe_set(cell, "BackColor", "0.12,0.12,0.12,1")
             wire_click(cell, "TttCell" .. idx)
         end
     end
 
-    -- Stroke layer sits ON TOP of the grid; all win-line blocks are its
-    -- children so the whole stroke tears down with one parent delete.
-    ui.stroke_layer = safe_append(dialog, "UIObject")
+    -- Stroke layer: a coordinate anchor + teardown parent for win-line
+    -- blocks, NOT a visible surface. Appended after the cells, so if MA3
+    -- renders later siblings on top and gives Button any default opaque
+    -- fill, a FULL-GRID-SIZED layer here would blank out the entire board
+    -- at all times -- a strong candidate for exactly the single blank
+    -- rectangle seen in on-console testing 2026-07-16. W/H are deliberately
+    -- 0 so the layer itself can never occlude anything; children are still
+    -- positioned via their own absolute X/Y (see cell_center_px) and are
+    -- expected to render regardless of the parent's own empty bounds.
+    ui.stroke_layer = safe_append(dialog, "Button")
     if ui.stroke_layer ~= nil then
+        safe_set(ui.stroke_layer, "Enabled", false)
         safe_set(ui.stroke_layer, "X", 0)
         safe_set(ui.stroke_layer, "Y", 40)
-        safe_set(ui.stroke_layer, "W", GRID_PX)
-        safe_set(ui.stroke_layer, "H", GRID_PX)
+        safe_set(ui.stroke_layer, "W", 0)
+        safe_set(ui.stroke_layer, "H", 0)
+        safe_set(ui.stroke_layer, "Text", "")
     end
 
     -- Restart button.
