@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix black-grid regression reported 2026-07-17: the whole 3x3 grid rendered
+  solid black from the moment the window opened, no cells visible. Root
+  cause -- `clear_symbol` (which runs on every empty cell, on every
+  refresh, including the very first `reset_game()` before any move) had
+  gained a `safe_set(cell, "Texture", "")` call when icon support was added
+  last round. There is no verified-working way to clear a `Texture` on this
+  build; assigning it an empty string is what turned every empty cell
+  black. Removed. Nothing currently sets a texture successfully either
+  (pending the `FindTexture` diagnostics below), so there was nothing to
+  clear. `plugin/test_ui_geometry.lua` gained a regression guard: cells
+  never played in a game must never have had `Texture` touched at all.
+
+### Changed
+
+- Instrument, rather than guess again, the two remaining silent failures
+  (Restart not clearing the win line; pool icons not resolving). Both
+  `Delete` and `FindTexture` calls are wrapped in `pcall`, which can hide
+  a plain "attempt to call a nil value" error exactly as easily as it hides
+  "called fine, had no effect" -- indistinguishable from System Monitor
+  without added logging:
+  - New `try_delete(parent, index)` attempts the colon-method form
+    (`parent:Delete(index)`, matching how `Append`/`Count`/`Ptr` are proven
+    to work via colon sugar on this build) and, if that doesn't reduce the
+    child count, the bare-global form (`Delete(parent, index)`) as a second
+    attempt. Every `pcall` failure and the final "neither worked" case are
+    logged via the existing `diag()` helper, which reaches System Monitor
+    as `[TicTacToe] ...` lines.
+  - `resolve_icon` now distinguishes, via `diag()`, "`FindTexture` errored"
+    (the function likely isn't callable as written) from "called fine,
+    found neither candidate name" (the function works, the pool name guess
+    is wrong) -- previously both cases looked identical (silent letter
+    fallback).
+  - This is diagnostic-only: the letter-first, texture-optional fallback
+    behavior is unchanged. The payoff is the next System Monitor
+    screenshot, which should finally show a decisive answer instead of
+    another silent "still doesn't work."
+
 ### Added
 
 - Real pool-icon symbols. Bulb cells layer the show's `fixture1_png`
