@@ -539,7 +539,7 @@ local function clear_stroke()
     end
     -- Prefer deleting children individually; fall back to nothing (silent).
     pcall(function()
-        local count = ui.stroke_layer:Count and ui.stroke_layer:Count() or 0
+        local count = ui.stroke_layer.Count and ui.stroke_layer:Count() or 0
         for k = count, 1, -1 do
             local child = ui.stroke_layer:Ptr(k)
             safe_delete(child)
