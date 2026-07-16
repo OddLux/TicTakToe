@@ -242,6 +242,7 @@ local game = {
 
 -- Handles we own. `dialog` is our BaseInput; teardown deletes ONLY it.
 local ui = {
+    overlay = nil, -- the screen overlay `dialog` is a child of (for deletion)
     dialog = nil, -- our BaseInput handle (owned subtree root)
     status = nil, -- status-line text object
     cells = {}, -- 9 cell button handles
@@ -308,20 +309,56 @@ local function safe_append(parent, class)
     return child
 end
 
--- Delete a handle's own subtree, defensively. Never raises.
-local function safe_delete(obj)
-    if obj == nil then
-        return
+-- Delete `child` from `parent` by locating its EXACT index among the
+-- parent's UI children and deleting that index. Never raises. Returns true
+-- only if the child count is confirmed to have gone down.
+--
+-- Official docs (grandMA3 2.3, HelpLua export, confirmed 2026-07-16) show
+-- object creation is PARENT-indexed: `Append(parent_handle, class, undo,
+-- count)`. Deletion mirrors that shape -- the exact signature echoed back
+-- by MA3's own error log when called wrong matches `Delete(parent_handle,
+-- integer:child_index, undo)`. So deletion targets the PARENT with an
+-- index, not the child object itself. Calling `child:Delete()` with no
+-- args (the previous approach) is why every block deletion failed on
+-- console: it spammed "returns nothing" for every single stroke block and
+-- left them all on screen through Restart.
+--
+-- We resolve the index by SEARCHING, rather than assuming "last child",
+-- because that assumption is unsafe wherever `parent` is shared with other
+-- actors -- specifically the screen overlay, which may also hold OTHER
+-- dialogs the user has open. Blindly deleting "the last child" there could
+-- destroy someone else's window, which the safety contract forbids
+-- absolutely. Searching by handle identity is safe regardless of position
+-- or what else has been appended around it.
+--
+-- GetUIChildrenCount(handle) / GetUIChild(handle, index) are the documented
+-- UI-child functions (distinct from the generic Object API's Count()/Ptr(),
+-- which are for show-data pools, not UI trees).
+local function delete_ui_child(parent, child)
+    if parent == nil or child == nil then
+        return false
     end
-    -- Try the documented deletion methods in order; stop at the first success.
-    local deleted = pcall(function()
-        obj:Delete()
+    local before, index = nil, nil
+    pcall(function()
+        before = GetUIChildrenCount(parent)
+        for i = 1, before do
+            if GetUIChild(parent, i) == child then
+                index = i
+                break
+            end
+        end
     end)
-    if not deleted then
-        pcall(function()
-            obj:Remove()
-        end)
+    if index == nil then
+        return false
     end
+    pcall(function()
+        parent:Delete(index)
+    end)
+    local after = before
+    pcall(function()
+        after = GetUIChildrenCount(parent)
+    end)
+    return (after or before) < before
 end
 
 -- Resolve the active screen overlay defensively. Returns a handle or nil.
@@ -342,58 +379,34 @@ end
 -- =====================================================================
 -- SECTION 4 -- SYMBOL / GLYPH RESOLUTION
 -- ---------------------------------------------------------------------
--- NO ICON, NO CUSTOM COLOR. Confirmed on-console (2026-07-16), two separate
--- findings:
+-- NO ICON. Confirmed on-console (2026-07-16): setting Texture to a guessed
+-- icon name ("object_light"/"object_audio") makes MA3's engine try to
+-- resolve it as an OBJECT ADDRESS/HANDLE ("Could not resolve object address
+-- for object_light"), asynchronously and past what safe_set's pcall+
+-- read-back can detect, leaving the cell with a broken texture and no text.
 --
---   1. Assigning BackColor/TextColor a raw "r,g,b,a" string makes MA3's
---      engine try to resolve it as an OBJECT ADDRESS/HANDLE ("Could not
---      resolve object address for 0.12,0.12,0.12,1" in System Monitor),
---      which silently breaks rendering of the widget. The documented-safe
---      alternative (Root().ColorTheme.ColorGroups.Global:Acquire())
---      allocates a PERSISTENT color pool entry in the show -- real
---      show-data mutation, out of bounds for this plugin. So: no color.
---
---   2. Setting Texture to a guessed icon name ("object_light" /
---      "object_audio") hits the exact same failure ("Could not resolve
---      object address for object_light") -- AND it is worse than the
---      color case, because the failure is asynchronous/engine-side: our
---      safe_set() pcall+read-back reports success (the string write itself
---      never throws), so the old icon->emoji fallback cascade never
---      reached the emoji tier at all. The cell was left with a broken
---      Texture and blanked Text, i.e. no symbol whatsoever.
---
--- Lesson: `safe_set`'s read-back can only catch script-level Lua errors,
--- not this class of async engine-side resolution failure. Any property
--- that behaves like an address/handle lookup (BackColor, TextColor,
--- Texture) is now avoided entirely rather than "tried defensively" --
--- defensiveness at the Lua level cannot protect against it. Plain `Text`
--- is the one property confirmed to render correctly on this build (the
--- Restart button and the status line both use it). The emoji glyph shape
--- alone distinguishes the two players.
+-- NO EMOJI EITHER, for the same reason. A later console test showed plain
+-- ASCII text ("Restart", "Lightbulb's turn") renders fine, but the emoji
+-- glyphs never appeared on the cells even though the underlying moves were
+-- registering correctly (win-line detection proved the board state was
+-- right). Emoji are 4-byte UTF-8 sequences; this build's UI font most
+-- likely doesn't carry those glyphs, or chokes on the encoding -- either
+-- way the write silently produces nothing visible, which safe_set's
+-- success check cannot detect, same failure shape as the icon bug. Plain
+-- letters are the one form confirmed to render on this build.
 -- =====================================================================
 
 local SYMBOLS = {
-    bulb = {
-        emoji = "\240\159\146\161", -- UTF-8 for U+1F4A1 light bulb
-        letter = "L",
-    },
-    speaker = {
-        emoji = "\240\159\148\138", -- UTF-8 for U+1F50A speaker
-        letter = "S",
-    },
+    bulb = "L",
+    speaker = "S",
 }
 
--- Apply a player's symbol to a cell button. Degrades emoji -> letter.
+-- Apply a player's symbol to a cell button.
 local function apply_symbol(cell, player)
     if cell == nil or player == nil then
         return
     end
-    local sym = SYMBOLS[player]
-    if safe_set(cell, "Text", sym.emoji) then
-        return
-    end
-    -- guaranteed fallback: a plain letter
-    safe_set(cell, "Text", sym.letter)
+    safe_set(cell, "Text", SYMBOLS[player])
 end
 
 local function clear_symbol(cell)
@@ -614,12 +627,10 @@ local function render_elbow_bars(path)
     return any
 end
 
--- Tear down the stroke: delete every block we created. We track handles
--- explicitly (rather than enumerating a parent's children) so we only ever
--- delete objects this plugin made.
+-- Tear down the stroke: delete every block we created, by handle.
 local function clear_stroke()
     for idx = #ui.stroke_blocks, 1, -1 do
-        safe_delete(ui.stroke_blocks[idx])
+        delete_ui_child(ui.dialog, ui.stroke_blocks[idx])
         ui.stroke_blocks[idx] = nil
     end
 end
@@ -723,7 +734,11 @@ end
 
 local function teardown()
     clear_stroke()
-    safe_delete(ui.dialog) -- own-subtree teardown ONLY
+    -- Own-subtree teardown ONLY: resolve our dialog's exact index among the
+    -- overlay's children and delete that index. Never assumes "last child"
+    -- here -- see delete_ui_child's comment for why that would be unsafe.
+    delete_ui_child(ui.overlay, ui.dialog)
+    ui.overlay = nil
     ui.dialog = nil
     ui.status = nil
     ui.cells = {}
@@ -785,12 +800,16 @@ local function build_ui()
         return false
     end
 
-    -- Our owned root. We keep this handle for own-subtree teardown.
+    -- Our owned root. We keep both handles: `dialog` for own-subtree
+    -- teardown, and `overlay` (its parent) so that teardown can resolve
+    -- dialog's exact index for deletion rather than guessing "last child" of
+    -- a container other dialogs may also live in.
     local dialog = safe_append(overlay, "BaseInput")
     if dialog == nil then
         diag("could not append BaseInput; aborting build")
         return false
     end
+    ui.overlay = overlay
     ui.dialog = dialog
     safe_set(dialog, "Name", "TicTacToe")
     safe_set(dialog, "W", 560)

@@ -20,29 +20,28 @@
 -- Fake MA3 object model
 -- ---------------------------------------------------------------------
 
+-- `Delete(index)` is PARENT-indexed, mirroring the real, doc-confirmed API
+-- shape (`Append(parent, class, undo, count)` creates on the parent; this
+-- mirrors that for deletion). Calling it removes the child AT that index
+-- from `self._children`, i.e. deletion is something you do to a PARENT,
+-- not to the child object itself -- matching the fix under test.
 local function new_obj(class)
     local obj = {}
     obj._class = class
     obj._children = {}
-    obj._deleted = false
     obj.Append = function(self, cls)
         local child = new_obj(cls)
         child._parent = self
         self._children[#self._children + 1] = child
         return child
     end
-    obj.Delete = function(self)
-        self._deleted = true
-        local parent = self._parent
-        if parent then
-            for idx, chd in ipairs(parent._children) do
-                if chd == self then
-                    table.remove(parent._children, idx)
-                    break
-                end
-            end
+    obj.Delete = function(self, index)
+        if index ~= nil and self._children[index] ~= nil then
+            table.remove(self._children, index)
         end
     end
+    -- Generic Object API (show-data pools): Count()/Ptr(). Real plugin uses
+    -- these ONLY for the read-only color-theme lookup, never for UI trees.
     obj.Count = function(self)
         return #self._children
     end
@@ -63,6 +62,16 @@ end
 
 function GetDisplayByIndex(_) -- luacheck: ignore
     return { ScreenOverlay = overlay }
+end
+
+-- Documented UI-child functions (distinct from the generic Object API's
+-- Count()/Ptr() above, which are for show-data pools, not UI trees).
+function GetUIChildrenCount(handle) -- luacheck: ignore
+    return #handle._children
+end
+
+function GetUIChild(handle, index) -- luacheck: ignore
+    return handle._children[index]
 end
 
 -- Fake color theme with a couple of named colors, mirroring the read-only
@@ -181,6 +190,21 @@ assert(stroke > 0, "win produced no stroke blocks")
 assert(stroke <= 48, "stroke exceeded the 48-block cap: " .. stroke)
 print("PASS: straight win drew " .. stroke .. " stroke blocks (cap 48)")
 
+-- Cells 1, 4, 7 (the winning column) must carry visible symbol text -- this
+-- is the bug where moves registered internally but nothing appeared on the
+-- board. Letters are the primary (not fallback) symbol; see SECTION 4.
+local cells = {}
+for _, btn in ipairs(buttons) do
+    if btn.Y ~= nil and btn.Y >= grid_top and btn.Y < grid_bottom and btn.W == CELL_PX - 6 then
+        cells[#cells + 1] = btn
+    end
+end
+-- cells table is in append order = board index order (1..9)
+assert(cells[1].Text == "L", "cell 1 should show bulb letter L, got " .. tostring(cells[1].Text))
+assert(cells[2].Text == "S", "cell 2 should show speaker letter S, got " .. tostring(cells[2].Text))
+assert(cells[4].Text == "L", "cell 4 should show bulb letter L, got " .. tostring(cells[4].Text))
+print("PASS: cell symbols are plain letters and actually render (Text set)")
+
 -- Every stroke block must land on the board, on the winning column's centre.
 local expected_x = 0.5 * CELL_PX -- column 1 centre = 80
 local checked = 0
@@ -242,6 +266,25 @@ local after2 = children_of_class(dlg2, "Button")
 local stroke2 = #after2 - 11
 assert(stroke2 > 0, "speaker line did not trigger a rigged bulb win stroke")
 print("PASS: speaker 3-in-a-row ignored; bulb win stroke drawn (" .. stroke2 .. " blocks)")
+
+-- ---------------------------------------------------------------------
+-- SAFETY-CRITICAL: closing our dialog must NEVER touch another dialog
+-- sharing the same screen overlay. This is what the safety contract
+-- absolutely forbids (no ClearUIChildren, no destroying other windows).
+-- The earlier bugfix moved dialog deletion from "assume last child" to
+-- "search by handle identity" specifically to guarantee this -- prove it.
+-- ---------------------------------------------------------------------
+
+local other_dialog = overlay:Append("BaseInput")
+other_dialog.Name = "SomeOtherPlugin"
+assert(#overlay._children == 2, "setup: expected our dialog + one other")
+
+signal_table["TttClose"]()
+
+assert(#overlay._children == 1, "close should remove exactly one dialog")
+assert(overlay._children[1] == other_dialog,
+    "close deleted the WRONG dialog -- destroyed another plugin's window")
+print("PASS: closing our dialog never touches another dialog on the overlay")
 
 print("")
 print("ALL UI GEOMETRY TESTS PASSED")
