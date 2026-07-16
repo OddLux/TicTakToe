@@ -7,7 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Real pool-icon symbols. Bulb cells layer the show's `fixture1_png`
+  (lightbulb) texture on top of the `L` letter fallback; Speaker cells
+  layer `user_png` (a person icon, confirmed intentional). Resolved
+  read-only via the documented `FindTexture(name)` global -- no pool
+  entries created or modified. The letter is ALWAYS set first and never
+  cleared, so a console where the icon can't be resolved just shows the
+  letter, never a blank cell.
+
 ### Fixed
+
+- Fix Restart still not clearing the win line, and the grid overlapping the
+  title bar's close button, both reported 2026-07-16. Root-caused against
+  the console's own `HelpLua` function dump
+  (`C:/ProgramData/MALightingTechnology/gma3_library/
+  grandMA3_lua_functions.txt`), authoritative for this exact build:
+  - `Delete` is a GLOBAL function, `Delete(handle, child_index[, undo])` --
+    not a `handle:Delete(...)` colon method the way `Append`/`Count`/`Ptr`
+    all work. The previous fix called it correctly shaped (parent + index)
+    but via colon sugar, and separately relied on comparing handles
+    returned by `GetUIChild` for equality to resolve which index to
+    delete -- neither produced an error, but the deletion silently never
+    happened, which is why the win line persisted through Restart. Now:
+    stroke-block cleanup (the frequent, every-restart path) always targets
+    the CURRENT LAST child by count, with no equality check at all, calling
+    the documented global form directly. The rarer, safety-critical case
+    (deleting our own dialog from the SHARED screen overlay, where other
+    open dialogs must never be touched) keeps the identity-search strategy,
+    since "last child" is unsafe to assume there.
+  - `GRID_Y` (top clearance before the 3x3 grid) was 40px, visibly too
+    tight for the real title bar. Bumped to 64px, and the dialog's overall
+    `W`/`H` are now derived from the layout constants instead of separate
+    hardcoded numbers, so the two can't drift out of sync again.
+  - `plugin/test_ui_geometry.lua` gained coverage for all of this: a
+    regression guard on minimum top clearance, and updated stubs for the
+    real `Delete`/`FindTexture` global signatures so the deletion fix is
+    exercised by the actual production code path, not just asserted by
+    hand.
 
 - Fix cell symbols never rendering and the win line surviving Restart, both
   found in on-console testing 2026-07-16 with an official grandMA3 2.3

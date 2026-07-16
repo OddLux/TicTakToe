@@ -309,32 +309,67 @@ local function safe_append(parent, class)
     return child
 end
 
--- Delete `child` from `parent` by locating its EXACT index among the
--- parent's UI children and deleting that index. Never raises. Returns true
--- only if the child count is confirmed to have gone down.
+-- ---------------------------------------------------------------------
+-- UI child deletion.
 --
--- Official docs (grandMA3 2.3, HelpLua export, confirmed 2026-07-16) show
--- object creation is PARENT-indexed: `Append(parent_handle, class, undo,
--- count)`. Deletion mirrors that shape -- the exact signature echoed back
--- by MA3's own error log when called wrong matches `Delete(parent_handle,
--- integer:child_index, undo)`. So deletion targets the PARENT with an
--- index, not the child object itself. Calling `child:Delete()` with no
--- args (the previous approach) is why every block deletion failed on
--- console: it spammed "returns nothing" for every single stroke block and
--- left them all on screen through Restart.
+-- Ground truth (2026-07-16): the console's OWN `HelpLua`-generated function
+-- dump (C:/ProgramData/MALightingTechnology/gma3_library/
+-- grandMA3_lua_functions.txt on the user's machine -- authoritative for
+-- this exact build, not a third-party mirror) lists:
+--   `Delete(light_userdata:handle, integer:child_index(1-based)[, undo]):
+--   nothing`
+-- i.e. a PARENT-indexed global: you delete a child FROM its parent by
+-- index, not the child object itself. The previous `child:Delete()` (no
+-- args) is why every stroke block failed to delete and spammed System
+-- Monitor with "returns nothing" for each one.
 --
--- We resolve the index by SEARCHING, rather than assuming "last child",
--- because that assumption is unsafe wherever `parent` is shared with other
--- actors -- specifically the screen overlay, which may also hold OTHER
--- dialogs the user has open. Blindly deleting "the last child" there could
--- destroy someone else's window, which the safety contract forbids
--- absolutely. Searching by handle identity is safe regardless of position
--- or what else has been appended around it.
+-- After switching to a parent+index call, deletion STILL silently failed
+-- with no errors -- most likely because resolving "which index is this
+-- child" by comparing handles for equality (`GetUIChild(parent, i) ==
+-- child`) doesn't reliably match. `Count`/`Ptr` (used for the read-only
+-- color-theme lookup) are ALSO documented as bare globals and DO work fine
+-- via colon sugar on this console, so the failure isn't the calling
+-- convention -- it's specifically trusting handle equality across two
+-- separate calls, which isn't guaranteed for whatever handle
+-- representation this binding uses.
 --
--- GetUIChildrenCount(handle) / GetUIChild(handle, index) are the documented
--- UI-child functions (distinct from the generic Object API's Count()/Ptr(),
--- which are for show-data pools, not UI trees).
-local function delete_ui_child(parent, child)
+-- Two different deletion strategies follow, chosen per call site:
+--   * delete_last_ui_child: no equality check at all -- always targets
+--     the CURRENT last child by count. Safe and simple wherever nothing
+--     else is ever appended to `parent` after our own children (true for
+--     stroke blocks under OUR OWN dialog).
+--   * delete_ui_child_by_handle: searches for the child's exact index by
+--     identity first. Slower and depends on equality working, but it's
+--     the only option where position can't be assumed -- specifically
+--     deleting OUR dialog from the SHARED screen overlay, where other
+--     open dialogs may sit after ours. If equality fails there, we
+--     degrade to doing nothing rather than risk the alternative (deleting
+--     "whatever is last"), which could destroy someone else's window --
+--     forbidden by the safety contract, worse than a lingering handle.
+-- ---------------------------------------------------------------------
+
+local function delete_last_ui_child(parent)
+    if parent == nil then
+        return false
+    end
+    local before = nil
+    pcall(function()
+        before = GetUIChildrenCount(parent)
+    end)
+    if before == nil or before <= 0 then
+        return false
+    end
+    pcall(function()
+        Delete(parent, before)
+    end)
+    local after = before
+    pcall(function()
+        after = GetUIChildrenCount(parent)
+    end)
+    return (after or before) < before
+end
+
+local function delete_ui_child_by_handle(parent, child)
     if parent == nil or child == nil then
         return false
     end
@@ -352,7 +387,7 @@ local function delete_ui_child(parent, child)
         return false
     end
     pcall(function()
-        parent:Delete(index)
+        Delete(parent, index)
     end)
     local after = before
     pcall(function()
@@ -379,21 +414,30 @@ end
 -- =====================================================================
 -- SECTION 4 -- SYMBOL / GLYPH RESOLUTION
 -- ---------------------------------------------------------------------
--- NO ICON. Confirmed on-console (2026-07-16): setting Texture to a guessed
--- icon name ("object_light"/"object_audio") makes MA3's engine try to
--- resolve it as an OBJECT ADDRESS/HANDLE ("Could not resolve object address
--- for object_light"), asynchronously and past what safe_set's pcall+
--- read-back can detect, leaving the cell with a broken texture and no text.
+-- Letter text is the GUARANTEED baseline. Confirmed on-console (2026-07-16)
+-- twice over: assigning Texture a raw guessed icon NAME string ("object_
+-- light"/"object_audio") makes MA3 try to resolve it as an object address
+-- and breaks silently; separately, emoji glyphs in Text never appeared even
+-- though board state was tracking correctly, most likely a font gap. Both
+-- failures are invisible to safe_set's pcall+read-back check. Plain ASCII
+-- letters are the one form proven to render, so `Text` is ALWAYS set to the
+-- letter first, unconditionally -- never removed, regardless of anything
+-- below.
 --
--- NO EMOJI EITHER, for the same reason. A later console test showed plain
--- ASCII text ("Restart", "Lightbulb's turn") renders fine, but the emoji
--- glyphs never appeared on the cells even though the underlying moves were
--- registering correctly (win-line detection proved the board state was
--- right). Emoji are 4-byte UTF-8 sequences; this build's UI font most
--- likely doesn't carry those glyphs, or chokes on the encoding -- either
--- way the write silently produces nothing visible, which safe_set's
--- success check cannot detect, same failure shape as the icon bug. Plain
--- letters are the one form confirmed to render on this build.
+-- Real pool icons layer ON TOP of that baseline, best-effort. The user's
+-- own Symbols pool (grandMA3 2.3, confirmed via HelpLua dump) has:
+--   38  fixture1_png / fixture1.png  -- lightbulb, for the Bulb player
+--   41  user_png / user.png          -- person icon, for the Speaker player
+--     (confirmed intentional 2026-07-16 despite not literally being a
+--     speaker glyph)
+-- `FindTexture(string:texture_name): light_userdata:handle` is a documented
+-- global (same dump) that resolves an EXISTING pool image to a real handle
+-- -- read-only, nothing created or modified, same shape as the working
+-- BackColor-via-theme-handle fix. The exact string FindTexture expects
+-- (the pool's internal Name vs its File Name) isn't confirmed, so both
+-- forms are tried. If FindTexture returns nothing for either, or the
+-- Texture write itself fails, the letter underneath is what the user sees
+-- -- there is no code path that can end with a blank cell again.
 -- =====================================================================
 
 local SYMBOLS = {
@@ -401,12 +445,46 @@ local SYMBOLS = {
     speaker = "S",
 }
 
--- Apply a player's symbol to a cell button.
+-- Candidate texture-name strings to try, in order, per player. Pool "Name"
+-- field first (as shown in the pool editor, without brackets), then the
+-- raw file name.
+local ICON_NAMES = {
+    bulb = { "fixture1_png", "fixture1.png" },
+    speaker = { "user_png", "user.png" },
+}
+
+-- Resolved once per activation, lazily, and cached. nil entries mean "not
+-- resolved" -- callers must not treat that as an error, just skip the
+-- upgrade.
+local icon_handles = {}
+
+local function resolve_icon(player)
+    if icon_handles[player] ~= nil then
+        return icon_handles[player]
+    end
+    local found = nil
+    for _, name in ipairs(ICON_NAMES[player] or {}) do
+        if found == nil then
+            pcall(function()
+                found = FindTexture(name)
+            end)
+        end
+    end
+    icon_handles[player] = found or false -- false = "tried, not found"
+    return found
+end
+
+-- Apply a player's symbol to a cell button. Letter first, always; icon is a
+-- best-effort visual upgrade layered on top, never a replacement path.
 local function apply_symbol(cell, player)
     if cell == nil or player == nil then
         return
     end
     safe_set(cell, "Text", SYMBOLS[player])
+    local icon = resolve_icon(player)
+    if icon then
+        safe_set(cell, "Texture", icon)
+    end
 end
 
 local function clear_symbol(cell)
@@ -414,6 +492,7 @@ local function clear_symbol(cell)
         return
     end
     safe_set(cell, "Text", "")
+    safe_set(cell, "Texture", "")
 end
 
 -- =====================================================================
@@ -447,17 +526,25 @@ end
 -- explicit geometry derived from these -- nothing is left to default
 -- placement (see the status-line note in SECTION 10).
 --
---   grid    : y  40 .. 520   (GRID_Y .. GRID_Y + GRID_PX)
---   status  : y 528 .. 568
---   restart : y 576 .. 624
---   dialog H = 640, so everything fits with room for the title bar.
+-- GRID_Y was 40 and the grid visibly overlapped the title bar's close
+-- button on-console (2026-07-16) -- the real title bar renders taller than
+-- that guess allowed for. Bumped to 64 with a wider safety margin; DIALOG_H
+-- is derived from the layout instead of a separate hardcoded number, so the
+-- two can never drift out of sync again.
+--
+--   grid    : y  64 .. 544   (GRID_Y .. GRID_Y + GRID_PX)
+--   status  : y 556 .. 596
+--   restart : y 608 .. 656
+--   dialog H = 672
 local GRID_PX = 480 -- pixel size of the 3x3 grid area
 local CELL_PX = GRID_PX / 3
-local GRID_Y = 40 -- top of the grid, in dialog space
-local STATUS_Y = GRID_Y + GRID_PX + 8 -- 528, directly under the grid
+local GRID_Y = 64 -- top of the grid, in dialog space (title-bar clearance)
+local STATUS_Y = GRID_Y + GRID_PX + 12 -- directly under the grid
 local STATUS_H = 40
-local RESTART_Y = STATUS_Y + STATUS_H + 8 -- 576, under the status line
+local RESTART_Y = STATUS_Y + STATUS_H + 12 -- under the status line
 local RESTART_H = 48
+local DIALOG_W = GRID_PX + 80 -- grid plus side margin
+local DIALOG_H = RESTART_Y + RESTART_H + 16 -- content height + bottom margin
 local BLOCK_MIN = 8 -- block edge in px
 local BLOCK_MAX_COUNT = 48 -- hard cap on total blocks
 
@@ -627,12 +714,18 @@ local function render_elbow_bars(path)
     return any
 end
 
--- Tear down the stroke: delete every block we created, by handle.
+-- Tear down the stroke: delete every block we created. Stroke blocks are
+-- always the temporally-last children appended to `ui.dialog` (nothing else
+-- is appended to it after build_ui), so repeatedly deleting the current
+-- last child removes exactly the blocks we made -- and sidesteps the
+-- handle-equality issue entirely for this, the highest-frequency deletion
+-- path (every restart, every win).
 local function clear_stroke()
-    for idx = #ui.stroke_blocks, 1, -1 do
-        delete_ui_child(ui.dialog, ui.stroke_blocks[idx])
-        ui.stroke_blocks[idx] = nil
+    local count = #ui.stroke_blocks
+    for _ = 1, count do
+        delete_last_ui_child(ui.dialog)
     end
+    ui.stroke_blocks = {}
 end
 
 -- Draw the win stroke for an outcome using the fallback chain.
@@ -736,14 +829,16 @@ local function teardown()
     clear_stroke()
     -- Own-subtree teardown ONLY: resolve our dialog's exact index among the
     -- overlay's children and delete that index. Never assumes "last child"
-    -- here -- see delete_ui_child's comment for why that would be unsafe.
-    delete_ui_child(ui.overlay, ui.dialog)
+    -- here -- see the UI-child-deletion comment above for why that would be
+    -- unsafe on a container other dialogs may also live in.
+    delete_ui_child_by_handle(ui.overlay, ui.dialog)
     ui.overlay = nil
     ui.dialog = nil
     ui.status = nil
     ui.cells = {}
     ui.stroke_blocks = {}
     stroke_color = nil -- do not hold a handle across instances
+    icon_handles = {} -- likewise for resolved icon texture handles
 end
 
 -- =====================================================================
@@ -812,8 +907,8 @@ local function build_ui()
     ui.overlay = overlay
     ui.dialog = dialog
     safe_set(dialog, "Name", "TicTacToe")
-    safe_set(dialog, "W", 560)
-    safe_set(dialog, "H", 640)
+    safe_set(dialog, "W", DIALOG_W)
+    safe_set(dialog, "H", DIALOG_H)
     safe_set(dialog, "AutoClose", false)
     safe_set(dialog, "CloseOnEscape", true)
 

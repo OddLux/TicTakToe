@@ -20,11 +20,6 @@
 -- Fake MA3 object model
 -- ---------------------------------------------------------------------
 
--- `Delete(index)` is PARENT-indexed, mirroring the real, doc-confirmed API
--- shape (`Append(parent, class, undo, count)` creates on the parent; this
--- mirrors that for deletion). Calling it removes the child AT that index
--- from `self._children`, i.e. deletion is something you do to a PARENT,
--- not to the child object itself -- matching the fix under test.
 local function new_obj(class)
     local obj = {}
     obj._class = class
@@ -34,11 +29,6 @@ local function new_obj(class)
         child._parent = self
         self._children[#self._children + 1] = child
         return child
-    end
-    obj.Delete = function(self, index)
-        if index ~= nil and self._children[index] ~= nil then
-            table.remove(self._children, index)
-        end
     end
     -- Generic Object API (show-data pools): Count()/Ptr(). Real plugin uses
     -- these ONLY for the read-only color-theme lookup, never for UI trees.
@@ -72,6 +62,28 @@ end
 
 function GetUIChild(handle, index) -- luacheck: ignore
     return handle._children[index]
+end
+
+-- `Delete(handle, index[, undo])` is a GLOBAL, PARENT-indexed function --
+-- ground truth from the console's own HelpLua function dump (2026-07-16),
+-- not a `child:Delete()` method. Deleting is something you do to a PARENT
+-- at an index, matching the fix under test.
+function Delete(handle, index) -- luacheck: ignore
+    if index ~= nil and handle._children[index] ~= nil then
+        table.remove(handle._children, index)
+    end
+end
+
+-- `FindTexture(name)` resolves an EXISTING pool image to a handle. Fake
+-- pool has exactly the two names the plugin looks for, so both the
+-- "found" and "not found" paths get exercised.
+local FAKE_TEXTURES = {
+    fixture1_png = { _class = "Texture", name = "fixture1_png" },
+    user_png = { _class = "Texture", name = "user_png" },
+}
+
+function FindTexture(name) -- luacheck: ignore
+    return FAKE_TEXTURES[name]
 end
 
 -- Fake color theme with a couple of named colors, mirroring the read-only
@@ -127,7 +139,8 @@ local buttons = children_of_class(dialog, "Button")
 -- status + 9 cells + restart = 11 buttons before any win stroke
 assert(#buttons == 11, "expected 11 buttons pre-win, got " .. #buttons)
 
-local GRID_PX, CELL_PX, GRID_Y = 480, 160, 40
+-- Mirrors the layout constants in TicTacToe.lua SECTION 5 -- keep in sync.
+local GRID_PX, CELL_PX, GRID_Y = 480, 160, 64
 
 -- ---------------------------------------------------------------------
 -- Assert: every child has explicit geometry and nothing overlaps the grid
@@ -168,6 +181,11 @@ end
 assert(below == 2, "expected status + restart below the grid, got " .. below)
 print("PASS: status and restart sit below the grid, not over it")
 
+-- Top clearance must be generous enough for a title bar + close button --
+-- regression guard for the reported overlap (2026-07-16, GRID_Y was 40).
+assert(grid_top >= 56, "top clearance too tight, risks overlapping the title bar close button: " .. grid_top)
+print("PASS: grid has generous top clearance (" .. grid_top .. "px) for the title bar")
+
 -- ---------------------------------------------------------------------
 -- Play a bulb straight win (col 1: cells 1,4,7) and check the stroke
 -- ---------------------------------------------------------------------
@@ -204,6 +222,16 @@ assert(cells[1].Text == "L", "cell 1 should show bulb letter L, got " .. tostrin
 assert(cells[2].Text == "S", "cell 2 should show speaker letter S, got " .. tostring(cells[2].Text))
 assert(cells[4].Text == "L", "cell 4 should show bulb letter L, got " .. tostring(cells[4].Text))
 print("PASS: cell symbols are plain letters and actually render (Text set)")
+
+-- Pool icons (resolved via the fake FindTexture) must layer on TOP of the
+-- letter, never replace it -- the letter is the guaranteed fallback if a
+-- real console can't resolve the icon, so it must survive regardless.
+assert(cells[1].Texture == FAKE_TEXTURES.fixture1_png,
+    "cell 1 (bulb) should carry the fixture1_png icon")
+assert(cells[1].Text == "L", "icon assignment must not clear the letter fallback")
+assert(cells[2].Texture == FAKE_TEXTURES.user_png,
+    "cell 2 (speaker) should carry the user_png icon")
+print("PASS: pool icons resolved and layered without clobbering the letter fallback")
 
 -- Every stroke block must land on the board, on the winning column's centre.
 local expected_x = 0.5 * CELL_PX -- column 1 centre = 80
