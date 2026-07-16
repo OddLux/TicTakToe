@@ -356,18 +356,67 @@ end
 --     forbidden by the safety contract, worse than a lingering handle.
 -- ---------------------------------------------------------------------
 
+-- try_get_ui_children_count / try_get_ui_child: same dual-attempt +
+-- diagnostics pattern as try_delete below, applied to the COUNT/INDEX
+-- lookups themselves. Ground truth (2026-07-17): a real System Monitor
+-- diag showed `GetUIChildrenCount(ui.overlay)` returning nil -- the count
+-- call itself was failing, which meant every deletion attempt downstream
+-- (including stroke-block cleanup on Restart) was silently bailing out
+-- before ever reaching try_delete, with NO log line, because the earlier
+-- version of this code only diagnosed try_delete's internals, not the
+-- count/lookup calls that gate it. `GetUIChildrenCount`/`GetUIChild` are
+-- documented as bare globals (same HelpLua dump, same "no Handle: prefix"
+-- format as `Delete`, which turned out to need BOTH forms tried) so the
+-- same bare-global-then-colon fallback applies here too.
+local function try_get_ui_children_count(parent, ctx)
+    local ok1, val1 = pcall(GetUIChildrenCount, parent)
+    if ok1 and val1 ~= nil then
+        return val1
+    end
+    if not ok1 then
+        diag(ctx .. ": GetUIChildrenCount(parent) errored: " .. tostring(val1))
+    end
+    local ok2, val2 = pcall(function()
+        return parent:GetUIChildrenCount()
+    end)
+    if ok2 and val2 ~= nil then
+        return val2
+    end
+    if not ok2 then
+        diag(ctx .. ": parent:GetUIChildrenCount() errored: " .. tostring(val2))
+    end
+    diag(ctx .. ": both GetUIChildrenCount forms failed/returned nil")
+    return nil
+end
+
+local function try_get_ui_child(parent, index, ctx)
+    local ok1, val1 = pcall(GetUIChild, parent, index)
+    if ok1 and val1 ~= nil then
+        return val1
+    end
+    if not ok1 then
+        diag(ctx .. ": GetUIChild(parent, " .. index .. ") errored: " .. tostring(val1))
+    end
+    local ok2, val2 = pcall(function()
+        return parent:GetUIChild(index)
+    end)
+    if ok2 and val2 ~= nil then
+        return val2
+    end
+    if not ok2 then
+        diag(ctx .. ": parent:GetUIChild(" .. index .. ") errored: " .. tostring(val2))
+    end
+    return nil
+end
+
 -- Attempt to delete child `index` of `parent`, trying colon-method form
 -- first, then bare-global form. Logs each failure via diag() so a System
 -- Monitor screenshot can distinguish "function doesn't exist" from
 -- "called fine, had no effect." Returns true only on a confirmed count
 -- decrease.
 local function try_delete(parent, index)
-    local before = nil
-    pcall(function()
-        before = GetUIChildrenCount(parent)
-    end)
+    local before = try_get_ui_children_count(parent, "try_delete")
     if before == nil then
-        diag("try_delete: GetUIChildrenCount failed, cannot verify")
         return false
     end
 
@@ -377,11 +426,8 @@ local function try_delete(parent, index)
     if not ok1 then
         diag("try_delete: parent:Delete(" .. index .. ") errored: " .. tostring(err1))
     end
-    local after1 = before
-    pcall(function()
-        after1 = GetUIChildrenCount(parent)
-    end)
-    if (after1 or before) < before then
+    local after1 = try_get_ui_children_count(parent, "try_delete (after colon)") or before
+    if after1 < before then
         return true
     end
 
@@ -391,11 +437,8 @@ local function try_delete(parent, index)
     if not ok2 then
         diag("try_delete: Delete(parent, " .. index .. ") errored: " .. tostring(err2))
     end
-    local after2 = before
-    pcall(function()
-        after2 = GetUIChildrenCount(parent)
-    end)
-    if (after2 or before) < before then
+    local after2 = try_get_ui_children_count(parent, "try_delete (after global)") or before
+    if after2 < before then
         return true
     end
 
@@ -408,10 +451,7 @@ local function delete_last_ui_child(parent)
     if parent == nil then
         return false
     end
-    local before = nil
-    pcall(function()
-        before = GetUIChildrenCount(parent)
-    end)
+    local before = try_get_ui_children_count(parent, "delete_last_ui_child")
     if before == nil or before <= 0 then
         return false
     end
@@ -422,16 +462,16 @@ local function delete_ui_child_by_handle(parent, child)
     if parent == nil or child == nil then
         return false
     end
-    local before, index = nil, nil
-    pcall(function()
-        before = GetUIChildrenCount(parent)
+    local before = try_get_ui_children_count(parent, "delete_ui_child_by_handle")
+    local index = nil
+    if before ~= nil then
         for i = 1, before do
-            if GetUIChild(parent, i) == child then
+            if try_get_ui_child(parent, i, "delete_ui_child_by_handle") == child then
                 index = i
                 break
             end
         end
-    end)
+    end
     if index == nil then
         diag("delete_ui_child_by_handle: handle not found among " ..
             tostring(before) .. " children -- equality lookup failed")
