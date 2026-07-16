@@ -38,6 +38,17 @@ local function new_obj(class)
     obj.Ptr = function(self, idx)
         return self._children[idx]
     end
+    -- Colon-method forms, matching the dual-attempt fallback in
+    -- try_get_ui_children_count / try_get_ui_child (production code tries
+    -- bare-global first, colon second). Present here so the fallback path
+    -- itself is exercisable, even though the bare globals below succeed
+    -- first in this stub.
+    obj.GetUIChildrenCount = function(self)
+        return #self._children
+    end
+    obj.GetUIChild = function(self, idx)
+        return self._children[idx]
+    end
     return obj
 end
 

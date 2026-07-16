@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Apply the same bare-global-then-colon dual-attempt pattern already used
+  for `Delete` to `GetUIChildrenCount`/`GetUIChild` as well, plus icon
+  candidates confirmed dead-ended (see Fixed). A real on-console diagnostic
+  (2026-07-17) showed `GetUIChildrenCount(ui.overlay)` itself returning
+  `nil` -- meaning the count/lookup calls that GATE every deletion attempt
+  were silently failing before `try_delete` was ever reached, on BOTH the
+  dialog-teardown path and (unlogged, a gap in the prior round's
+  instrumentation) the stroke-block cleanup path Restart depends on. New
+  `try_get_ui_children_count`/`try_get_ui_child` try the bare-global form
+  first, then `parent:GetUIChildrenCount()`/`parent:GetUIChild(index)`,
+  logging via `diag()` at every failure point so the next System Monitor
+  screenshot can finally show whether either form actually works for these
+  two functions specifically.
+- All three attempted `FindTexture` naming schemes for pool icons (custom
+  Symbols pool item name, and three forms of the built-in library file
+  path) came back "found neither" with no errors, confirmed 2026-07-17.
+  `FindTexture` clearly isn't matching by any string form tried so far;
+  further guessing is paused rather than continued blindly. Letter symbols
+  (`L`/`S`) remain the confirmed, working display.
+
 - Switch icon candidates from the show's custom Symbols pool item names
   (confirmed via System Monitor 2026-07-17 to not resolve via `FindTexture`)
   to the console's own BUILT-IN library files instead, using exact paths
