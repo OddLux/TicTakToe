@@ -34,3 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"UIObject"` append class (status line, win-stroke layer) with `"Button"`,
   which is confirmed to render, and zeroed the win-stroke layer's own size so
   it can act as a coordinate anchor without risking occlusion of the grid.
+- Fix cell symbols never appearing even after the color fix above. On-console
+  testing showed a second round of `Could not resolve object address for
+  object_light` / `object_audio` -- the guessed icon names used for the
+  `Texture` property hit the same address-resolution failure as `BackColor`.
+  This one was worse: the failure is asynchronous/engine-side, so
+  `safe_set`'s pcall+read-back reported success and the icon->emoji->letter
+  fallback cascade never reached the emoji tier, leaving cells with a broken
+  texture and no text. Removed the icon/`Texture` attempt entirely; symbols
+  now go straight to the emoji glyph (falling back to a plain letter),
+  since `Text` is the one property confirmed to render correctly.
