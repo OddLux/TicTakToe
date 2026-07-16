@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Replace `FindTexture`-based icon lookup with direct Symbols pool
+  navigation, prompted by the user asking whether the plugin could import
+  symbols the same way DataPools do. `FindTexture` never matched across
+  five distinct string attempts over two prior rounds despite calling fine
+  every time -- a real signal it doesn't index by any guessable string.
+  Considered and rejected using `Import(handle, file_path, file_name)`
+  (the actual documented function backing the pool editor's own "Import"
+  button, HelpLua dump line 258): calling it would create/modify a pool
+  entry on every activation, real show-data mutation this plugin has
+  avoided throughout. Instead: the built-in symbols already EXIST as pool
+  objects (`fixture1_png` at index 38, `user_png` at index 41, confirmed
+  via the pool editor screenshots), so `resolve_icon` now navigates
+  directly to them via `Root().Symbols:Ptr(index)` -- the exact same
+  proven mechanism `resolve_stroke_color` already uses successfully for
+  `Root().ColorTheme.ColorGroups.Global`. Read-only: nothing imported,
+  created, or modified. The exact property path from `Root()` to the
+  Symbols pool isn't confirmed, so five candidate paths are tried
+  defensively, each verified by a working `:Count()` before use, with
+  `diag()` logging on failure. Letter fallback (`L`/`S`) is unchanged and
+  unconditional either way.
+
 - Apply the same bare-global-then-colon dual-attempt pattern already used
   for `Delete` to `GetUIChildrenCount`/`GetUIChild` as well, plus icon
   candidates confirmed dead-ended (see Fixed). A real on-console diagnostic

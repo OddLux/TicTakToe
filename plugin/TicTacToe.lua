@@ -540,55 +540,91 @@ local SYMBOLS = {
     speaker = "S",
 }
 
--- Candidate texture-name strings to try, in order (most to least
--- specific), per player.
-local ICON_NAMES = {
-    bulb = {
-        "C:/ProgramData/MALightingTechnology/gma3_2.4.2/shared/resource/lib_symbols/object/fixture1.png",
-        "object/fixture1.png",
-        "fixture1.png",
-    },
-    speaker = {
-        "C:/ProgramData/MALightingTechnology/gma3_2.4.2/shared/resource/lib_symbols/executor/executor_learnspeed.png",
-        "executor/executor_learnspeed.png",
-        "executor_learnspeed.png",
-    },
+-- ---------------------------------------------------------------------
+-- Third approach (2026-07-17): FindTexture never matched any of five
+-- distinct string forms tried across two rounds (custom pool item name,
+-- three forms of a built-in library file path) despite calling fine every
+-- time -- five misses with zero errors is a real signal that FindTexture
+-- doesn't index by any guessable string at all, not just a naming miss.
+--
+-- The user's own question prompted a better approach: DON'T import or
+-- string-match anything. The built-in symbols ("fixture1_png" at pool
+-- index 38, "user_png" at index 41 -- confirmed via the pool editor
+-- screenshots, 2026-07-16) already EXIST as real pool objects. Navigate to
+-- them directly, the exact same proven way `resolve_stroke_color` already
+-- reaches `Root().ColorTheme.ColorGroups.Global` successfully (dot-path
+-- navigation off Root(), then `:Count()`/`:Ptr(index)` -- the documented,
+-- working generic Object API, not FindTexture). This is read-only: it
+-- looks up an EXISTING object, nothing is imported, created, or modified,
+-- same safety shape as the color fix.
+--
+-- Exact property path from Root() to the Symbols pool isn't confirmed
+-- (unlike ColorTheme.ColorGroups.Global, which is proven), so several
+-- plausible paths are tried defensively, most to least likely.
+-- ---------------------------------------------------------------------
+
+local SYMBOL_POOL_INDEX = {
+    bulb = 38, -- fixture1_png
+    speaker = 41, -- user_png
 }
+
+local function resolve_symbol_pool()
+    local candidates = {
+        function() return Root().Symbols end,
+        function() return Root().DataPools.Symbols end,
+        function() return Root().ShowData.Symbols end,
+        function() return DataPool().Symbols end,
+        function() return CurrentDataPool().Symbols end,
+    }
+    for _, get in ipairs(candidates) do
+        local pool = nil
+        local ok = pcall(function()
+            pool = get()
+        end)
+        if ok and pool ~= nil then
+            -- Verify it actually behaves like a pool (has a working Count).
+            local count_ok, count = pcall(function()
+                return pool:Count()
+            end)
+            if count_ok and count ~= nil and count > 0 then
+                return pool
+            end
+        end
+    end
+    return nil
+end
 
 -- Resolved once per activation, lazily, and cached. nil entries mean "not
 -- resolved" -- callers must not treat that as an error, just skip the
 -- upgrade.
 local icon_handles = {}
+local symbol_pool = nil -- false once tried-and-failed, nil = not tried yet
 
 local function resolve_icon(player)
     if icon_handles[player] ~= nil then
         return icon_handles[player]
     end
+
+    if symbol_pool == nil then
+        symbol_pool = resolve_symbol_pool() or false
+        if symbol_pool == false then
+            diag("resolve_icon: could not locate the Symbols pool via any candidate path")
+        end
+    end
+
     local found = nil
-    local any_error = nil
-    for _, name in ipairs(ICON_NAMES[player] or {}) do
-        if found == nil then
-            local ok, err = pcall(function()
-                found = FindTexture(name)
-            end)
-            if not ok then
-                any_error = tostring(err)
-            end
+    if symbol_pool then
+        local index = SYMBOL_POOL_INDEX[player]
+        local ok, err = pcall(function()
+            found = symbol_pool:Ptr(index)
+        end)
+        if not ok then
+            diag("resolve_icon(" .. player .. "): pool:Ptr(" .. index .. ") errored: " .. tostring(err))
+        elseif found == nil then
+            diag("resolve_icon(" .. player .. "): pool:Ptr(" .. index .. ") returned nil")
         end
     end
-    if found == nil then
-        if any_error ~= nil then
-            -- FindTexture errored (e.g. "attempt to call a nil value") --
-            -- means it isn't a bare global on this build at all, same
-            -- failure class investigated for Delete.
-            diag("resolve_icon(" .. player .. "): FindTexture errored: " .. any_error)
-        else
-            -- Called fine, just didn't find either candidate name -- the
-            -- function exists, the pool name guess is what's wrong.
-            diag("resolve_icon(" .. player .. "): FindTexture found neither of: " ..
-                table.concat(ICON_NAMES[player] or {}, ", "))
-        end
-    end
+
     icon_handles[player] = found or false -- false = "tried, not found"
     return found
 end
@@ -964,6 +1000,7 @@ local function teardown()
     ui.stroke_blocks = {}
     stroke_color = nil -- do not hold a handle across instances
     icon_handles = {} -- likewise for resolved icon texture handles
+    symbol_pool = nil -- and the resolved Symbols pool handle
 end
 
 -- =====================================================================

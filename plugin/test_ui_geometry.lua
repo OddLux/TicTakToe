@@ -85,21 +85,6 @@ function Delete(handle, index) -- luacheck: ignore
     end
 end
 
--- `FindTexture(name)` resolves an EXISTING image to a handle. Fake pool
--- only recognizes the LEAST specific candidate (bare file name) for each
--- player, so the multi-candidate fallback in resolve_icon is actually
--- exercised (not just "first candidate always wins").
-local BULB_TEXTURE = { _class = "Texture", name = "fixture1.png" }
-local SPEAKER_TEXTURE = { _class = "Texture", name = "executor_learnspeed.png" }
-local FAKE_TEXTURES = {
-    ["fixture1.png"] = BULB_TEXTURE,
-    ["executor_learnspeed.png"] = SPEAKER_TEXTURE,
-}
-
-function FindTexture(name) -- luacheck: ignore
-    return FAKE_TEXTURES[name]
-end
-
 -- Fake color theme with a couple of named colors, mirroring the read-only
 -- lookup the plugin does (Root().ColorTheme.ColorGroups.Global).
 local function fake_color(name)
@@ -111,8 +96,23 @@ end
 local color_group = new_obj("ColorGroup")
 color_group._children = { fake_color("Background"), fake_color("Selected") }
 
+-- Fake Symbols pool: real pool objects at the exact indices resolve_icon
+-- looks up (38 = bulb, 41 = speaker), matching the pool editor screenshots
+-- (2026-07-16). resolve_icon navigates to this via Root().Symbols and
+-- Count()/Ptr(index) -- the SAME proven mechanism as the color lookup
+-- above, not FindTexture (dropped this round after 5 failed name/path
+-- guesses across two prior rounds).
+local BULB_TEXTURE = new_obj("SymbolImage")
+local SPEAKER_TEXTURE = new_obj("SymbolImage")
+local symbols_pool = new_obj("SymbolsPool")
+for i = 1, 41 do
+    symbols_pool._children[i] = new_obj("SymbolImage")
+end
+symbols_pool._children[38] = BULB_TEXTURE
+symbols_pool._children[41] = SPEAKER_TEXTURE
+
 function Root() -- luacheck: ignore
-    return { ColorTheme = { ColorGroups = { Global = color_group } } }
+    return { ColorTheme = { ColorGroups = { Global = color_group } }, Symbols = symbols_pool }
 end
 
 -- ---------------------------------------------------------------------
