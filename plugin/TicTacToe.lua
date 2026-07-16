@@ -468,20 +468,31 @@ end
 -- letter first, unconditionally -- never removed, regardless of anything
 -- below.
 --
--- Real pool icons layer ON TOP of that baseline, best-effort. The user's
--- own Symbols pool (grandMA3 2.3, confirmed via HelpLua dump) has:
---   38  fixture1_png / fixture1.png  -- lightbulb, for the Bulb player
---   41  user_png / user.png          -- person icon, for the Speaker player
---     (confirmed intentional 2026-07-16 despite not literally being a
---     speaker glyph)
+-- Real pool icons layer ON TOP of that baseline, best-effort.
+--
+-- First attempt (2026-07-16) used the show's custom Symbols pool item
+-- names ("fixture1_png"/"user_png") -- FindTexture called fine (no error)
+-- but found neither. Confirmed via System Monitor 2026-07-17.
+--
+-- Second attempt uses the CONSOLE'S OWN BUILT-IN library instead, per
+-- exact file paths the user located and confirmed in the "Select Image for
+-- Import" browser (Internal library, 2026-07-17):
+--   lightbulb: C:/ProgramData/MALightingTechnology/gma3_2.4.2/shared/
+--              resource/lib_symbols/object/fixture1.png
+--   speaker:   C:/ProgramData/MALightingTechnology/gma3_2.4.2/shared/
+--              resource/lib_symbols/executor/executor_learnspeed.png
+-- Built-in stock icons are more likely to already be registered wherever
+-- FindTexture actually searches than a show-specific custom pool item, so
+-- several candidate string forms are tried, from most to least specific:
+-- full absolute path, path relative to lib_symbols/, bare file name.
+--
 -- `FindTexture(string:texture_name): light_userdata:handle` is a documented
--- global (same dump) that resolves an EXISTING pool image to a real handle
+-- global (HelpLua dump) that resolves an EXISTING image to a real handle
 -- -- read-only, nothing created or modified, same shape as the working
--- BackColor-via-theme-handle fix. The exact string FindTexture expects
--- (the pool's internal Name vs its File Name) isn't confirmed, so both
--- forms are tried. If FindTexture returns nothing for either, or the
--- Texture write itself fails, the letter underneath is what the user sees
--- -- there is no code path that can end with a blank cell again.
+-- BackColor-via-theme-handle fix. If FindTexture returns nothing for any
+-- candidate, or the Texture write itself fails, the letter underneath is
+-- what the user sees -- there is no code path that can end with a blank
+-- cell again.
 -- =====================================================================
 
 local SYMBOLS = {
@@ -489,12 +500,19 @@ local SYMBOLS = {
     speaker = "S",
 }
 
--- Candidate texture-name strings to try, in order, per player. Pool "Name"
--- field first (as shown in the pool editor, without brackets), then the
--- raw file name.
+-- Candidate texture-name strings to try, in order (most to least
+-- specific), per player.
 local ICON_NAMES = {
-    bulb = { "fixture1_png", "fixture1.png" },
-    speaker = { "user_png", "user.png" },
+    bulb = {
+        "C:/ProgramData/MALightingTechnology/gma3_2.4.2/shared/resource/lib_symbols/object/fixture1.png",
+        "object/fixture1.png",
+        "fixture1.png",
+    },
+    speaker = {
+        "C:/ProgramData/MALightingTechnology/gma3_2.4.2/shared/resource/lib_symbols/executor/executor_learnspeed.png",
+        "executor/executor_learnspeed.png",
+        "executor_learnspeed.png",
+    },
 }
 
 -- Resolved once per activation, lazily, and cached. nil entries mean "not

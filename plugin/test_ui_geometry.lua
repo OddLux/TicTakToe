@@ -74,12 +74,15 @@ function Delete(handle, index) -- luacheck: ignore
     end
 end
 
--- `FindTexture(name)` resolves an EXISTING pool image to a handle. Fake
--- pool has exactly the two names the plugin looks for, so both the
--- "found" and "not found" paths get exercised.
+-- `FindTexture(name)` resolves an EXISTING image to a handle. Fake pool
+-- only recognizes the LEAST specific candidate (bare file name) for each
+-- player, so the multi-candidate fallback in resolve_icon is actually
+-- exercised (not just "first candidate always wins").
+local BULB_TEXTURE = { _class = "Texture", name = "fixture1.png" }
+local SPEAKER_TEXTURE = { _class = "Texture", name = "executor_learnspeed.png" }
 local FAKE_TEXTURES = {
-    fixture1_png = { _class = "Texture", name = "fixture1_png" },
-    user_png = { _class = "Texture", name = "user_png" },
+    ["fixture1.png"] = BULB_TEXTURE,
+    ["executor_learnspeed.png"] = SPEAKER_TEXTURE,
 }
 
 function FindTexture(name) -- luacheck: ignore
@@ -223,14 +226,16 @@ assert(cells[2].Text == "S", "cell 2 should show speaker letter S, got " .. tost
 assert(cells[4].Text == "L", "cell 4 should show bulb letter L, got " .. tostring(cells[4].Text))
 print("PASS: cell symbols are plain letters and actually render (Text set)")
 
--- Pool icons (resolved via the fake FindTexture) must layer on TOP of the
--- letter, never replace it -- the letter is the guaranteed fallback if a
--- real console can't resolve the icon, so it must survive regardless.
-assert(cells[1].Texture == FAKE_TEXTURES.fixture1_png,
-    "cell 1 (bulb) should carry the fixture1_png icon")
+-- Pool icons (resolved via the fake FindTexture, matching only the LEAST
+-- specific candidate -- proving the full fallback chain runs, not just the
+-- first entry) must layer on TOP of the letter, never replace it -- the
+-- letter is the guaranteed fallback if a real console can't resolve the
+-- icon, so it must survive regardless.
+assert(cells[1].Texture == BULB_TEXTURE,
+    "cell 1 (bulb) should carry the fixture1.png icon (via fallback chain)")
 assert(cells[1].Text == "L", "icon assignment must not clear the letter fallback")
-assert(cells[2].Texture == FAKE_TEXTURES.user_png,
-    "cell 2 (speaker) should carry the user_png icon")
+assert(cells[2].Texture == SPEAKER_TEXTURE,
+    "cell 2 (speaker) should carry the executor_learnspeed.png icon (via fallback chain)")
 print("PASS: pool icons resolved and layered without clobbering the letter fallback")
 
 -- Every stroke block must land on the board, on the winning column's centre.

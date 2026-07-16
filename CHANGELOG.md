@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Switch icon candidates from the show's custom Symbols pool item names
+  (confirmed via System Monitor 2026-07-17 to not resolve via `FindTexture`)
+  to the console's own BUILT-IN library files instead, using exact paths
+  the user located and confirmed in the "Select Image for Import" browser:
+  `lib_symbols/object/fixture1.png` (lightbulb) and `lib_symbols/executor/
+  executor_learnspeed.png` (speaker/sound). Built-in stock icons are more
+  likely to already be registered wherever `FindTexture` searches than a
+  show-specific custom pool entry. Three candidate string forms are tried
+  per icon, most to least specific (full absolute path, path relative to
+  `lib_symbols/`, bare file name) -- letter fallback is unchanged and
+  unconditional either way.
+
 ### Fixed
 
 - Fix black-grid regression reported 2026-07-17: the whole 3x3 grid rendered
