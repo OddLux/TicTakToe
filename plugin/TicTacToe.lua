@@ -342,49 +342,57 @@ end
 -- =====================================================================
 -- SECTION 4 -- SYMBOL / GLYPH RESOLUTION
 -- ---------------------------------------------------------------------
--- Prefer MA3 built-in icons; fall back to emoji, then to a plain letter.
--- Icon names are unverified, so we ONLY ever set them via safe_set.
+-- NO ICON, NO CUSTOM COLOR. Confirmed on-console (2026-07-16), two separate
+-- findings:
 --
--- NO CUSTOM COLOR. Confirmed on-console (2026-07-16): assigning BackColor
--- or TextColor a raw "r,g,b,a" string makes MA3's engine try to resolve it
--- as an OBJECT ADDRESS/HANDLE ("Could not resolve object address for
--- 0.12,0.12,0.12,1" in System Monitor), which silently breaks rendering of
--- the widget -- this is what blanked the whole 3x3 grid. The documented-safe
--- alternative (Root().ColorTheme.ColorGroups.Global:Acquire()) allocates a
--- PERSISTENT color pool entry in the show, which is real show-data mutation
--- and out of bounds per this plugin's safety contract. So: no color. The
--- emoji glyph shape (or letter) alone distinguishes the two players.
+--   1. Assigning BackColor/TextColor a raw "r,g,b,a" string makes MA3's
+--      engine try to resolve it as an OBJECT ADDRESS/HANDLE ("Could not
+--      resolve object address for 0.12,0.12,0.12,1" in System Monitor),
+--      which silently breaks rendering of the widget. The documented-safe
+--      alternative (Root().ColorTheme.ColorGroups.Global:Acquire())
+--      allocates a PERSISTENT color pool entry in the show -- real
+--      show-data mutation, out of bounds for this plugin. So: no color.
+--
+--   2. Setting Texture to a guessed icon name ("object_light" /
+--      "object_audio") hits the exact same failure ("Could not resolve
+--      object address for object_light") -- AND it is worse than the
+--      color case, because the failure is asynchronous/engine-side: our
+--      safe_set() pcall+read-back reports success (the string write itself
+--      never throws), so the old icon->emoji fallback cascade never
+--      reached the emoji tier at all. The cell was left with a broken
+--      Texture and blanked Text, i.e. no symbol whatsoever.
+--
+-- Lesson: `safe_set`'s read-back can only catch script-level Lua errors,
+-- not this class of async engine-side resolution failure. Any property
+-- that behaves like an address/handle lookup (BackColor, TextColor,
+-- Texture) is now avoided entirely rather than "tried defensively" --
+-- defensiveness at the Lua level cannot protect against it. Plain `Text`
+-- is the one property confirmed to render correctly on this build (the
+-- Restart button and the status line both use it). The emoji glyph shape
+-- alone distinguishes the two players.
 -- =====================================================================
 
 local SYMBOLS = {
     bulb = {
-        icon = "object_light", -- unverified MA3 icon name (best guess)
         emoji = "\240\159\146\161", -- UTF-8 for U+1F4A1 light bulb
         letter = "L",
     },
     speaker = {
-        icon = "object_audio", -- unverified MA3 icon name (best guess)
         emoji = "\240\159\148\138", -- UTF-8 for U+1F50A speaker
         letter = "S",
     },
 }
 
--- Apply a player's symbol to a cell button. Degrades icon -> emoji -> letter.
+-- Apply a player's symbol to a cell button. Degrades emoji -> letter.
 local function apply_symbol(cell, player)
     if cell == nil or player == nil then
         return
     end
     local sym = SYMBOLS[player]
-    -- 1. try a built-in icon/texture (unverified property names)
-    if safe_set(cell, "Texture", sym.icon) then
-        safe_set(cell, "Text", "")
-        return
-    end
-    -- 2. try the emoji glyph as button text
     if safe_set(cell, "Text", sym.emoji) then
         return
     end
-    -- 3. guaranteed fallback: a plain letter
+    -- guaranteed fallback: a plain letter
     safe_set(cell, "Text", sym.letter)
 end
 
@@ -392,7 +400,6 @@ local function clear_symbol(cell)
     if cell == nil then
         return
     end
-    safe_set(cell, "Texture", "")
     safe_set(cell, "Text", "")
 end
 
