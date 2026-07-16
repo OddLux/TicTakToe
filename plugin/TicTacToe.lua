@@ -324,14 +324,22 @@ end
 -- Monitor with "returns nothing" for each one.
 --
 -- After switching to a parent+index call, deletion STILL silently failed
--- with no errors -- most likely because resolving "which index is this
--- child" by comparing handles for equality (`GetUIChild(parent, i) ==
--- child`) doesn't reliably match. `Count`/`Ptr` (used for the read-only
--- color-theme lookup) are ALSO documented as bare globals and DO work fine
--- via colon sugar on this console, so the failure isn't the calling
--- convention -- it's specifically trusting handle equality across two
--- separate calls, which isn't guaranteed for whatever handle
--- representation this binding uses.
+-- with no errors visible in System Monitor. Two candidate explanations,
+-- both plausible and NOT yet distinguished by evidence:
+--   (a) `Delete` isn't actually a bare global despite the doc listing it
+--       without a "Handle:" prefix -- calling a nil global raises "attempt
+--       to call a nil value", which our own pcall swallows silently. This
+--       would look identical to "nothing happened."
+--   (b) `Delete` IS callable (via colon sugar, like `Append`/`Count`/`Ptr`
+--       all proven to be) but resolving "which index is this child" by
+--       comparing handles for equality (`GetUIChild(parent, i) == child`)
+--       doesn't reliably match, so the delete call is simply never reached.
+-- Rather than guess a third convention blindly, try_delete below attempts
+-- BOTH the colon-method and bare-global forms, verifies success via an
+-- actual count decrease (not just "no error"), and -- critically -- logs
+-- via diag() whenever a pcall catches something, so the NEXT System
+-- Monitor screenshot gives a definitive answer instead of another silent
+-- "still doesn't work."
 --
 -- Two different deletion strategies follow, chosen per call site:
 --   * delete_last_ui_child: no equality check at all -- always targets
@@ -348,6 +356,54 @@ end
 --     forbidden by the safety contract, worse than a lingering handle.
 -- ---------------------------------------------------------------------
 
+-- Attempt to delete child `index` of `parent`, trying colon-method form
+-- first, then bare-global form. Logs each failure via diag() so a System
+-- Monitor screenshot can distinguish "function doesn't exist" from
+-- "called fine, had no effect." Returns true only on a confirmed count
+-- decrease.
+local function try_delete(parent, index)
+    local before = nil
+    pcall(function()
+        before = GetUIChildrenCount(parent)
+    end)
+    if before == nil then
+        diag("try_delete: GetUIChildrenCount failed, cannot verify")
+        return false
+    end
+
+    local ok1, err1 = pcall(function()
+        parent:Delete(index)
+    end)
+    if not ok1 then
+        diag("try_delete: parent:Delete(" .. index .. ") errored: " .. tostring(err1))
+    end
+    local after1 = before
+    pcall(function()
+        after1 = GetUIChildrenCount(parent)
+    end)
+    if (after1 or before) < before then
+        return true
+    end
+
+    local ok2, err2 = pcall(function()
+        Delete(parent, index)
+    end)
+    if not ok2 then
+        diag("try_delete: Delete(parent, " .. index .. ") errored: " .. tostring(err2))
+    end
+    local after2 = before
+    pcall(function()
+        after2 = GetUIChildrenCount(parent)
+    end)
+    if (after2 or before) < before then
+        return true
+    end
+
+    diag("try_delete: both colon and global Delete left count at " .. before ..
+        " for index " .. index .. " -- deletion is not taking effect")
+    return false
+end
+
 local function delete_last_ui_child(parent)
     if parent == nil then
         return false
@@ -359,14 +415,7 @@ local function delete_last_ui_child(parent)
     if before == nil or before <= 0 then
         return false
     end
-    pcall(function()
-        Delete(parent, before)
-    end)
-    local after = before
-    pcall(function()
-        after = GetUIChildrenCount(parent)
-    end)
-    return (after or before) < before
+    return try_delete(parent, before)
 end
 
 local function delete_ui_child_by_handle(parent, child)
@@ -384,16 +433,11 @@ local function delete_ui_child_by_handle(parent, child)
         end
     end)
     if index == nil then
+        diag("delete_ui_child_by_handle: handle not found among " ..
+            tostring(before) .. " children -- equality lookup failed")
         return false
     end
-    pcall(function()
-        Delete(parent, index)
-    end)
-    local after = before
-    pcall(function()
-        after = GetUIChildrenCount(parent)
-    end)
-    return (after or before) < before
+    return try_delete(parent, index)
 end
 
 -- Resolve the active screen overlay defensively. Returns a handle or nil.
@@ -463,11 +507,28 @@ local function resolve_icon(player)
         return icon_handles[player]
     end
     local found = nil
+    local any_error = nil
     for _, name in ipairs(ICON_NAMES[player] or {}) do
         if found == nil then
-            pcall(function()
+            local ok, err = pcall(function()
                 found = FindTexture(name)
             end)
+            if not ok then
+                any_error = tostring(err)
+            end
+        end
+    end
+    if found == nil then
+        if any_error ~= nil then
+            -- FindTexture errored (e.g. "attempt to call a nil value") --
+            -- means it isn't a bare global on this build at all, same
+            -- failure class investigated for Delete.
+            diag("resolve_icon(" .. player .. "): FindTexture errored: " .. any_error)
+        else
+            -- Called fine, just didn't find either candidate name -- the
+            -- function exists, the pool name guess is what's wrong.
+            diag("resolve_icon(" .. player .. "): FindTexture found neither of: " ..
+                table.concat(ICON_NAMES[player] or {}, ", "))
         end
     end
     icon_handles[player] = found or false -- false = "tried, not found"
@@ -491,8 +552,14 @@ local function clear_symbol(cell)
     if cell == nil then
         return
     end
+    -- NO Texture-clearing. Confirmed the regression source (2026-07-17):
+    -- clear_symbol runs on every empty cell, on every refresh, including
+    -- the very first reset_game() before any move -- so an empty-string
+    -- Texture assignment here rendered the WHOLE grid black from the
+    -- moment the window opened. There is no verified-working way to clear
+    -- a texture on this build, and nothing currently sets one successfully
+    -- either (see resolve_icon), so there's nothing to clear.
     safe_set(cell, "Text", "")
-    safe_set(cell, "Texture", "")
 end
 
 -- =====================================================================

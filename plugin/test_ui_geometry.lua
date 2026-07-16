@@ -267,6 +267,20 @@ local post = children_of_class(dialog, "Button")
 assert(#post == 11, "restart left stroke blocks behind: " .. (#post - 11))
 print("PASS: restart removed every stroke block")
 
+-- Regression guard (2026-07-17): clear_symbol must NEVER touch Texture.
+-- Doing so on every empty cell, on every refresh -- including cells never
+-- played at all -- is what rendered the whole grid black from the moment
+-- the window opened, before any move. Check cells that were never part of
+-- the first game (3, 6, 8, 9): they were "cleared" at build time and again
+-- at restart, exactly the original bug's trigger path, and must never have
+-- had a Texture written.
+for _, idx in ipairs({ 3, 6, 8, 9 }) do
+    local cell = cells[idx]
+    assert(cell.Texture == nil,
+        "unplayed cell " .. idx .. " has a Texture -- black-grid regression")
+end
+print("PASS: never-played cells never have Texture touched (black-grid regression guard)")
+
 -- ---------------------------------------------------------------------
 -- Idempotent re-activation must not stack overlays
 -- ---------------------------------------------------------------------
