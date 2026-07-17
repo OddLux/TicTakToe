@@ -356,19 +356,59 @@ end
 --     forbidden by the safety contract, worse than a lingering handle.
 -- ---------------------------------------------------------------------
 
--- try_get_ui_children_count / try_get_ui_child: same dual-attempt +
--- diagnostics pattern as try_delete below, applied to the COUNT/INDEX
--- lookups themselves. Ground truth (2026-07-17): a real System Monitor
--- diag showed `GetUIChildrenCount(ui.overlay)` returning nil -- the count
--- call itself was failing, which meant every deletion attempt downstream
--- (including stroke-block cleanup on Restart) was silently bailing out
--- before ever reaching try_delete, with NO log line, because the earlier
--- version of this code only diagnosed try_delete's internals, not the
--- count/lookup calls that gate it. `GetUIChildrenCount`/`GetUIChild` are
--- documented as bare globals (same HelpLua dump, same "no Handle: prefix"
--- format as `Delete`, which turned out to need BOTH forms tried) so the
--- same bare-global-then-colon fallback applies here too.
+-- try_get_ui_children_count / try_get_ui_child: multi-tier fallback for
+-- enumerating a UI parent's children, from most to least evidenced.
+--
+-- Tier 1 -- `Children(handle)`: a documented Object API function (found in
+-- a third-party API reference the user pointed to, 2026-07-17,
+-- github.com/MacTirney/GrandMA3-API-Documentation) with an actual working
+-- example (`mySequence:Children()` returning a table, iterated with
+-- `#cues`/`cues[i]`). Stronger evidence than tier 2 below, which has never
+-- had a confirmed-working example -- only documentation-format inference.
+-- Colon form tried first per that doc's own stated convention ("omittable
+-- with colon notation"), bare-global second.
+--
+-- Tier 2 -- `GetUIChildrenCount`/`GetUIChild`: the original approach. Kept
+-- as fallback in case `Children()` doesn't exist on this build or doesn't
+-- work on UI-tree handles specifically (the reference example used it on
+-- a show-data Sequence, not a UI dialog -- unconfirmed whether it applies
+-- here too). Ground truth (2026-07-17): a real System Monitor diag showed
+-- `GetUIChildrenCount(ui.overlay)` returning nil -- the count call itself
+-- was failing, which meant every deletion attempt downstream (including
+-- stroke-block cleanup on Restart) was silently bailing out before ever
+-- reaching try_delete, with no log line, because an earlier version of
+-- this code only diagnosed try_delete's internals, not the count/lookup
+-- calls that gate it.
+--
+-- Both tiers are logged via diag() on failure so the next System Monitor
+-- screenshot shows exactly which (if any) tier actually works.
+
+local function try_get_children_table(parent, ctx)
+    local ok1, val1 = pcall(function()
+        return parent:Children()
+    end)
+    if ok1 and val1 ~= nil then
+        return val1
+    end
+    if not ok1 then
+        diag(ctx .. ": parent:Children() errored: " .. tostring(val1))
+    end
+    local ok2, val2 = pcall(Children, parent)
+    if ok2 and val2 ~= nil then
+        return val2
+    end
+    if not ok2 then
+        diag(ctx .. ": Children(parent) errored: " .. tostring(val2))
+    end
+    return nil
+end
+
 local function try_get_ui_children_count(parent, ctx)
+    local children = try_get_children_table(parent, ctx)
+    if children ~= nil then
+        return #children
+    end
+
     local ok1, val1 = pcall(GetUIChildrenCount, parent)
     if ok1 and val1 ~= nil then
         return val1
@@ -385,11 +425,16 @@ local function try_get_ui_children_count(parent, ctx)
     if not ok2 then
         diag(ctx .. ": parent:GetUIChildrenCount() errored: " .. tostring(val2))
     end
-    diag(ctx .. ": both GetUIChildrenCount forms failed/returned nil")
+    diag(ctx .. ": Children() and both GetUIChildrenCount forms failed/returned nil")
     return nil
 end
 
 local function try_get_ui_child(parent, index, ctx)
+    local children = try_get_children_table(parent, ctx)
+    if children ~= nil and children[index] ~= nil then
+        return children[index]
+    end
+
     local ok1, val1 = pcall(GetUIChild, parent, index)
     if ok1 and val1 ~= nil then
         return val1
@@ -568,26 +613,46 @@ local SYMBOL_POOL_INDEX = {
     speaker = 41, -- user_png
 }
 
-local function resolve_symbol_pool()
-    local candidates = {
-        function() return Root().Symbols end,
-        function() return Root().DataPools.Symbols end,
-        function() return Root().ShowData.Symbols end,
-        function() return DataPool().Symbols end,
-        function() return CurrentDataPool().Symbols end,
-    }
-    for _, get in ipairs(candidates) do
-        local pool = nil
-        local ok = pcall(function()
-            pool = get()
+-- Candidate root paths to the Symbols pool, most to least likely. Same
+-- uncertainty as before (unlike ColorTheme.ColorGroups.Global, this path
+-- isn't proven), so several are tried.
+local SYMBOL_ROOT_CANDIDATES = {
+    function() return Root().Symbols end,
+    function() return Root().DataPools.Symbols end,
+    function() return Root().ShowData.Symbols end,
+    function() return DataPool().Symbols end,
+    function() return CurrentDataPool().Symbols end,
+}
+
+-- Second lead from the user's linked third-party API reference
+-- (github.com/MacTirney/GrandMA3-API-Documentation, 2026-07-17): a working
+-- example indexes a DataPool sub-collection with plain BRACKET syntax --
+-- `DataPool().Sequences[1]` -- not the `:Count()`/`:Ptr(index)` colon-method
+-- pattern used for `Root().ColorTheme.ColorGroups.Global`. That pattern was
+-- itself evidenced (color lookup is confirmed working on-console), but
+-- Symbols may behave like Sequences rather than like ColorTheme -- unknown
+-- which, so for each root candidate both `root[index]` (bracket) and
+-- `root:Ptr(index)` (colon) are tried, bracket first per the newer, more
+-- directly-evidenced example.
+local function resolve_icon_via_pool(player)
+    local index = SYMBOL_POOL_INDEX[player]
+    for _, get_root in ipairs(SYMBOL_ROOT_CANDIDATES) do
+        local root = nil
+        local get_ok = pcall(function()
+            root = get_root()
         end)
-        if ok and pool ~= nil then
-            -- Verify it actually behaves like a pool (has a working Count).
-            local count_ok, count = pcall(function()
-                return pool:Count()
+        if get_ok and root ~= nil then
+            local bracket_ok, bracket_val = pcall(function()
+                return root[index]
             end)
-            if count_ok and count ~= nil and count > 0 then
-                return pool
+            if bracket_ok and bracket_val ~= nil then
+                return bracket_val
+            end
+            local ptr_ok, ptr_val = pcall(function()
+                return root:Ptr(index)
+            end)
+            if ptr_ok and ptr_val ~= nil then
+                return ptr_val
             end
         end
     end
@@ -598,31 +663,16 @@ end
 -- resolved" -- callers must not treat that as an error, just skip the
 -- upgrade.
 local icon_handles = {}
-local symbol_pool = nil -- false once tried-and-failed, nil = not tried yet
 
 local function resolve_icon(player)
     if icon_handles[player] ~= nil then
         return icon_handles[player]
     end
 
-    if symbol_pool == nil then
-        symbol_pool = resolve_symbol_pool() or false
-        if symbol_pool == false then
-            diag("resolve_icon: could not locate the Symbols pool via any candidate path")
-        end
-    end
-
-    local found = nil
-    if symbol_pool then
-        local index = SYMBOL_POOL_INDEX[player]
-        local ok, err = pcall(function()
-            found = symbol_pool:Ptr(index)
-        end)
-        if not ok then
-            diag("resolve_icon(" .. player .. "): pool:Ptr(" .. index .. ") errored: " .. tostring(err))
-        elseif found == nil then
-            diag("resolve_icon(" .. player .. "): pool:Ptr(" .. index .. ") returned nil")
-        end
+    local found = resolve_icon_via_pool(player)
+    if found == nil then
+        diag("resolve_icon(" .. player .. "): neither bracket-index nor :Ptr() " ..
+            "found index " .. SYMBOL_POOL_INDEX[player] .. " via any candidate root path")
     end
 
     icon_handles[player] = found or false -- false = "tried, not found"
@@ -1000,7 +1050,6 @@ local function teardown()
     ui.stroke_blocks = {}
     stroke_color = nil -- do not hold a handle across instances
     icon_handles = {} -- likewise for resolved icon texture handles
-    symbol_pool = nil -- and the resolved Symbols pool handle
 end
 
 -- =====================================================================
