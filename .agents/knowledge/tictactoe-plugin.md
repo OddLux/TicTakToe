@@ -119,6 +119,32 @@ gotcha noted below: `Append`, `Delete`, `Get`, `Count`, `Ptr`,
 `GetUIChildrenCount`, `GetUIChild`, `UIChildren`, `FindTexture`, `Import`,
 `Root`, `DataPool`, `CurrentDataPool`.
 
+**Secondary source (2026-07-17, user-provided):** a third-party API
+reference, github.com/MacTirney/GrandMA3-API-Documentation, covers the
+"Object API" and "Object Free API" with worked examples (not just
+signatures). Two leads from it are now wired into the code, untested on
+console as of this writing:
+- `Children(handle)` (colon or bare) returns a real Lua table of child
+  handles — has an actual working example (`mySequence:Children()`,
+  iterated via `#`/`[i]`), unlike `GetUIChildrenCount`/`GetUIChild` which
+  have never had a confirmed example. Now tried as the primary tier in
+  `try_get_ui_children_count`/`try_get_ui_child`, old tier kept as
+  fallback.
+- Pool sub-collections may be indexed with plain brackets —
+  `DataPool().Sequences[1]` — not just `:Ptr(index)`. Now tried first in
+  `resolve_icon_via_pool`, `:Ptr()` kept as fallback per root candidate.
+- Also notable but **not wired in**: `Dump(handle)` prints an object's
+  full name/class/properties/children to the Command Line History window
+  (not System Monitor). Worth suggesting to the user as a manual
+  diagnostic they can run directly in the console's Lua Input popup —
+  much faster than another round-trip through diag()/screenshot — rather
+  than adding it to the shipped plugin (would spam Command Line History on
+  every activation).
+- This reference did **not** cover UI dialog construction, the plugin
+  entry signature, or `Texture`/`BackColor`/`Delete` specifically — it did
+  not resolve the open bugs outright, only supplied two new candidate
+  mechanisms.
+
 ## Gotchas / non-obvious behavior
 
 - **"No error" does not mean "it worked."** This tripped up nearly every
@@ -196,19 +222,24 @@ win-line stroke blocks stay visible on screen.
    Restart's cleanup actually goes through) had never been instrumented to
    log that specific failure — so the whole chain was likely bailing out
    silently before `try_delete` was ever reached, on every prior round.
-5. **Current state (untested on console):** `GetUIChildrenCount`/
-   `GetUIChild` now get the same dual-attempt treatment as `Delete`
-   (bare-global first, then colon-method), via new
+5. `GetUIChildrenCount`/`GetUIChild` got the same dual-attempt treatment as
+   `Delete` (bare-global first, then colon-method), via new
    `try_get_ui_children_count`/`try_get_ui_child` helpers, with `diag()`
-   logging at every failure point on every call site. This should either
-   finally work, or produce a decisive System Monitor error explaining
-   exactly why not.
+   logging at every failure point on every call site — tested on console,
+   **still broken**, no decisive error surfaced.
+6. **Current state (untested on console):** a third-party API reference
+   the user linked (github.com/MacTirney/GrandMA3-API-Documentation,
+   2026-07-17) documents `Children(handle)` with an actual working example
+   returning a real Lua table — stronger evidence than
+   `GetUIChildrenCount`/`GetUIChild`, which never had one. Now tried as the
+   primary tier ahead of the old dual-attempt (kept as fallback) in both
+   helpers.
 
 **Next step if still broken:** get a fresh System Monitor screenshot right
 after a Restart click and read the `[TicTacToe] ...` diagnostic lines —
-they should now say specifically which of the 4 calling-convention
-combinations (colon/global × GetUIChildrenCount/Delete) succeeded or
-failed, rather than nothing at all.
+they should now say whether `Children()` (colon or bare) resolved the
+children table, and if not, which of the older calling-convention
+combinations succeeded or failed.
 
 ## Open bug 2: Pool icons not resolving (cosmetic — letters already work)
 
@@ -243,27 +274,34 @@ the intended lightbulb/speaker pool images.
    own Import button) — **rejected**, because calling it live would
    create/modify a pool entry on every plugin activation, which is real
    show-data mutation the plugin has avoided everywhere else.
-6. **Current approach (untested on console):** the built-in symbols
-   already **exist** as pool objects (`fixture1_png` at pool index 38,
-   `user_png` at index 41 — visible directly in the pool editor
-   screenshots). `resolve_icon` now navigates to them directly via
+6. The built-in symbols already **exist** as pool objects (`fixture1_png`
+   at pool index 38, `user_png` at index 41 — visible directly in the pool
+   editor screenshots). `resolve_icon` navigated to them via
    `Root().Symbols:Ptr(38)` / `:Ptr(41)` — the exact same proven mechanism
-   already working for the win-line color
-   (`Root().ColorTheme.ColorGroups.Global`, same `Count()`/`Ptr()`
-   pattern). Purely read-only. The exact property path from `Root()` down
-   to the Symbols pool isn't confirmed (unlike `ColorTheme`, which is
-   proven), so 5 candidate paths are tried defensively
+   working for the win-line color — trying 5 candidate root paths
    (`Root().Symbols`, `Root().DataPools.Symbols`, `Root().ShowData.Symbols`,
-   `DataPool().Symbols`, `CurrentDataPool().Symbols`), each verified by a
-   working `:Count()` before use, with `diag()` logging on failure.
+   `DataPool().Symbols`, `CurrentDataPool().Symbols`). **Untested on
+   console as of the commit that shipped it** — superseded by step 7
+   before a console test happened.
+7. **Current approach (untested on console):** the same third-party
+   reference that surfaced `Children()` also has a working example,
+   `DataPool().Sequences[1]`, indexing a pool sub-collection with plain
+   **brackets** rather than `:Ptr()`. `resolve_icon_via_pool` now tries
+   `root[index]` first, `root:Ptr(index)` second, per each of the same 5
+   candidate root paths from step 6.
 
 **Next step if still not working:** System Monitor after opening the
-plugin should show a `resolve_icon` diagnostic naming which (if any)
-candidate path resolved, or that all five failed — that will tell us
-whether the problem is the *path to the pool* or something deeper about
-how `Texture` accepts a `SymbolImage`-class handle specifically (which has
-never been confirmed compatible, unlike `Color`-class handles for
-`BackColor`).
+plugin should show a `resolve_icon` diagnostic naming that neither
+bracket-index nor `:Ptr()` found the target index via any candidate root —
+that will tell us whether the problem is the *path to the pool* (still
+unconfirmed, unlike `ColorTheme`) or something deeper about how `Texture`
+accepts a `SymbolImage`-class handle specifically (never confirmed
+compatible, unlike `Color`-class handles for `BackColor`). If both indexing
+forms keep missing on every candidate root, that would be strong evidence
+the root path itself is wrong, not the indexing syntax — worth trying
+`Dump(Root())` (see "Ground truth source" above) manually in the console's
+Lua Input popup to see the real top-level property names, rather than
+continuing to guess root paths blindly.
 
 ## Testing
 
