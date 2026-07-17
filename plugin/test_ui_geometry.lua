@@ -55,6 +55,15 @@ local function new_obj(class)
     obj.Children = function(self)
         return self._children
     end
+    -- `parent:Delete(index)` -- the ONLY form try_delete calls now. Ground
+    -- truth (2026-07-17): the bare-global form errored with "attempt to
+    -- call a nil value" on the real console -- it does not exist there, so
+    -- this stub no longer defines it either, matching reality.
+    obj.Delete = function(self, idx)
+        if idx ~= nil and self._children[idx] ~= nil then
+            table.remove(self._children, idx)
+        end
+    end
     return obj
 end
 
@@ -85,16 +94,6 @@ function GetUIChild(handle, index) -- luacheck: ignore
     return handle._children[index]
 end
 
--- `Delete(handle, index[, undo])` is a GLOBAL, PARENT-indexed function --
--- ground truth from the console's own HelpLua function dump (2026-07-16),
--- not a `child:Delete()` method. Deleting is something you do to a PARENT
--- at an index, matching the fix under test.
-function Delete(handle, index) -- luacheck: ignore
-    if index ~= nil and handle._children[index] ~= nil then
-        table.remove(handle._children, index)
-    end
-end
-
 -- Fake color theme with a couple of named colors, mirroring the read-only
 -- lookup the plugin does (Root().ColorTheme.ColorGroups.Global).
 local function fake_color(name)
@@ -106,18 +105,19 @@ end
 local color_group = new_obj("ColorGroup")
 color_group._children = { fake_color("Background"), fake_color("Selected") }
 
--- Fake Symbols pool: real pool objects at the exact indices resolve_icon
--- looks up (38 = bulb, 41 = speaker), matching the pool editor screenshots
--- (2026-07-16). Exposed via plain BRACKET indexing (`symbols_pool[38]`),
--- matching the primary tier `resolve_icon_via_pool` now tries first --
--- evidenced by `DataPool().Sequences[1]` in the user's linked third-party
--- API reference (github.com/MacTirney/GrandMA3-API-Documentation,
--- 2026-07-17), not the `:Ptr(index)` colon form used for the color lookup.
+-- Fake Symbols pool: real pool objects at the exact page.index address
+-- resolve_icon looks up (2.38 = bulb, 2.41 = speaker), matching BOTH the
+-- pool editor screenshots (2026-07-16, flat 38/41) AND the console's own
+-- native "Call Image 2.38" / "Call Image 2.41" addressing observed
+-- 2026-07-17. Flat indices deliberately left EMPTY here (only the
+-- page-nested form is populated) so this test actually exercises the
+-- page-qualified tiers in `resolve_icon_via_pool`, not just the flat ones
+-- already proven by the (real, on-console) evidence that flat access
+-- alone doesn't resolve these objects.
 local BULB_TEXTURE = new_obj("SymbolImage")
 local SPEAKER_TEXTURE = new_obj("SymbolImage")
 local symbols_pool = new_obj("SymbolsPool")
-symbols_pool[38] = BULB_TEXTURE
-symbols_pool[41] = SPEAKER_TEXTURE
+symbols_pool[2] = { [38] = BULB_TEXTURE, [41] = SPEAKER_TEXTURE }
 
 function Root() -- luacheck: ignore
     return { ColorTheme = { ColorGroups = { Global = color_group } }, Symbols = symbols_pool }

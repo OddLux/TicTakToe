@@ -454,41 +454,34 @@ local function try_get_ui_child(parent, index, ctx)
     return nil
 end
 
--- Attempt to delete child `index` of `parent`, trying colon-method form
--- first, then bare-global form. Logs each failure via diag() so a System
--- Monitor screenshot can distinguish "function doesn't exist" from
--- "called fine, had no effect." Returns true only on a confirmed count
--- decrease.
+-- Attempt to delete child `index` of `parent` via colon-method form.
+-- Ground truth (2026-07-17, real System Monitor capture): the bare-global
+-- form `Delete(parent, index)` errors with "attempt to call a nil value
+-- (global 'Delete')" -- it does not exist as a bare global on this build,
+-- despite the HelpLua dump listing it without a "Handle:" prefix (the same
+-- misleading formatting `Append`/`Count`/`Ptr` have, where colon form IS
+-- correct). No longer attempted; this was proven dead, not just unverified.
+-- Logs via diag() if the colon call itself errors or has no effect, so a
+-- System Monitor screenshot can distinguish the two.
 local function try_delete(parent, index)
     local before = try_get_ui_children_count(parent, "try_delete")
     if before == nil then
         return false
     end
 
-    local ok1, err1 = pcall(function()
+    local ok, err = pcall(function()
         parent:Delete(index)
     end)
-    if not ok1 then
-        diag("try_delete: parent:Delete(" .. index .. ") errored: " .. tostring(err1))
+    if not ok then
+        diag("try_delete: parent:Delete(" .. index .. ") errored: " .. tostring(err))
     end
-    local after1 = try_get_ui_children_count(parent, "try_delete (after colon)") or before
-    if after1 < before then
+    local after = try_get_ui_children_count(parent, "try_delete (after)") or before
+    if after < before then
         return true
     end
 
-    local ok2, err2 = pcall(function()
-        Delete(parent, index)
-    end)
-    if not ok2 then
-        diag("try_delete: Delete(parent, " .. index .. ") errored: " .. tostring(err2))
-    end
-    local after2 = try_get_ui_children_count(parent, "try_delete (after global)") or before
-    if after2 < before then
-        return true
-    end
-
-    diag("try_delete: both colon and global Delete left count at " .. before ..
-        " for index " .. index .. " -- deletion is not taking effect")
+    diag("try_delete: parent:Delete(" .. index .. ") left count at " .. before ..
+        " -- deletion is not taking effect")
     return false
 end
 
@@ -613,6 +606,17 @@ local SYMBOL_POOL_INDEX = {
     speaker = 41, -- user_png
 }
 
+-- Page component of the pool address. Ground truth (2026-07-17): manually
+-- selecting these exact images in the console's own Symbols pool window
+-- produced the command-line responses "Not implemented: Call Image 2.38"
+-- and "Not implemented: Call Image 2.41" -- the console's own native
+-- addressing for these objects is the two-part "2.38" / "2.41" (page.index),
+-- not the flat index this code tried until now. "Not implemented" was the
+-- response to that specific CLICK-driven CLI action, not to anything this
+-- plugin does -- it says nothing about whether Lua handle-based access
+-- with the page included would work, only that the page component is real.
+local SYMBOL_POOL_PAGE = 2
+
 -- Candidate root paths to the Symbols pool, most to least likely. Same
 -- uncertainty as before (unlike ColorTheme.ColorGroups.Global, this path
 -- isn't proven), so several are tried.
@@ -636,12 +640,14 @@ local SYMBOL_ROOT_CANDIDATES = {
 -- directly-evidenced example.
 local function resolve_icon_via_pool(player)
     local index = SYMBOL_POOL_INDEX[player]
+    local page = SYMBOL_POOL_PAGE
     for _, get_root in ipairs(SYMBOL_ROOT_CANDIDATES) do
         local root = nil
         local get_ok = pcall(function()
             root = get_root()
         end)
         if get_ok and root ~= nil then
+            -- Flat forms (page not included), tried first as before.
             local bracket_ok, bracket_val = pcall(function()
                 return root[index]
             end)
@@ -653,6 +659,28 @@ local function resolve_icon_via_pool(player)
             end)
             if ptr_ok and ptr_val ~= nil then
                 return ptr_val
+            end
+
+            -- Page-qualified forms ("2.38"), per the console's own native
+            -- addressing for this object -- tried defensively, several
+            -- shapes since which one Lua expects isn't confirmed.
+            local nested_ok, nested_val = pcall(function()
+                return root[page][index]
+            end)
+            if nested_ok and nested_val ~= nil then
+                return nested_val
+            end
+            local nested_ptr_ok, nested_ptr_val = pcall(function()
+                return root[page]:Ptr(index)
+            end)
+            if nested_ptr_ok and nested_ptr_val ~= nil then
+                return nested_ptr_val
+            end
+            local two_arg_ok, two_arg_val = pcall(function()
+                return root:Ptr(page, index)
+            end)
+            if two_arg_ok and two_arg_val ~= nil then
+                return two_arg_val
             end
         end
     end
