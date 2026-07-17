@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Add `Children(handle)` as a new, better-evidenced primary tier for UI
+  child enumeration (`try_get_ui_children_count`/`try_get_ui_child`),
+  ahead of the existing `GetUIChildrenCount`/`GetUIChild` dual-attempt.
+  Found via a third-party API reference the user linked
+  (github.com/MacTirney/GrandMA3-API-Documentation, 2026-07-17), which
+  includes a working example (`mySequence:Children()` returning a real
+  table, iterated via `#`/`[i]`) -- stronger evidence than
+  `GetUIChildrenCount`/`GetUIChild`, which have never had a confirmed
+  working example this session. Old tier kept as fallback in case
+  `Children()` doesn't apply to UI-tree handles specifically (the
+  reference example used it on a show-data Sequence, not a dialog).
+- Add plain bracket indexing (`root[index]`) as the primary attempt in
+  `resolve_icon_via_pool`, tried before the existing `root:Ptr(index)`
+  colon form, per the same reference's `DataPool().Sequences[1]` example --
+  direct evidence that pool sub-collections may be bracket-indexed rather
+  than requiring `:Ptr()`. Both forms are now tried per candidate root
+  path, bracket first.
+
 - Replace `FindTexture`-based icon lookup with direct Symbols pool
   navigation, prompted by the user asking whether the plugin could import
   symbols the same way DataPools do. `FindTexture` never matched across

@@ -49,7 +49,17 @@ local function new_obj(class)
     obj.GetUIChild = function(self, idx)
         return self._children[idx]
     end
+    -- `Children()` -- the primary, better-evidenced tier tried first by
+    -- try_get_children_table (github.com/MacTirney/GrandMA3-API-Documentation,
+    -- 2026-07-17). Returns a real table, matching the documented example.
+    obj.Children = function(self)
+        return self._children
+    end
     return obj
+end
+
+function Children(handle) -- luacheck: ignore
+    return handle._children
 end
 
 local overlay = new_obj("ScreenOverlay")
@@ -98,18 +108,16 @@ color_group._children = { fake_color("Background"), fake_color("Selected") }
 
 -- Fake Symbols pool: real pool objects at the exact indices resolve_icon
 -- looks up (38 = bulb, 41 = speaker), matching the pool editor screenshots
--- (2026-07-16). resolve_icon navigates to this via Root().Symbols and
--- Count()/Ptr(index) -- the SAME proven mechanism as the color lookup
--- above, not FindTexture (dropped this round after 5 failed name/path
--- guesses across two prior rounds).
+-- (2026-07-16). Exposed via plain BRACKET indexing (`symbols_pool[38]`),
+-- matching the primary tier `resolve_icon_via_pool` now tries first --
+-- evidenced by `DataPool().Sequences[1]` in the user's linked third-party
+-- API reference (github.com/MacTirney/GrandMA3-API-Documentation,
+-- 2026-07-17), not the `:Ptr(index)` colon form used for the color lookup.
 local BULB_TEXTURE = new_obj("SymbolImage")
 local SPEAKER_TEXTURE = new_obj("SymbolImage")
 local symbols_pool = new_obj("SymbolsPool")
-for i = 1, 41 do
-    symbols_pool._children[i] = new_obj("SymbolImage")
-end
-symbols_pool._children[38] = BULB_TEXTURE
-symbols_pool._children[41] = SPEAKER_TEXTURE
+symbols_pool[38] = BULB_TEXTURE
+symbols_pool[41] = SPEAKER_TEXTURE
 
 function Root() -- luacheck: ignore
     return { ColorTheme = { ColorGroups = { Global = color_group } }, Symbols = symbols_pool }
