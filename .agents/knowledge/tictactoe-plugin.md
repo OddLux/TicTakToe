@@ -26,8 +26,8 @@ placeholder name only; treat that as cosmetic, not a real ticket reference.
 | 9-cell grid, letter symbols (`L`/`S`) | **Confirmed working on-console.** This is the reliable baseline — never remove it in favor of an untested upgrade. |
 | Win-line rendering + color | **Confirmed working on-console** (a diagonal win produced a visible colored line). |
 | Layout (grid vs title bar / close button) | **Believed fixed**, not independently re-confirmed after the `GRID_Y` bump to 64px. |
-| **Restart not clearing the win line** | **Still broken as of 2026-07-17.** See "Open bug 1" below — this is the priority. |
-| Pool icons (real bulb/speaker images instead of letters) | **Not working, actively being pursued.** See "Open bug 2" below. Cosmetic only; letters already work. |
+| Restart clears the win line | **Confirmed working on-console, 2026-07-17.** No errors. Fixed by the `Children()` primary tier; see "Open bug 1 — RESOLVED" below for the full chain and one loose end. |
+| Pool icons (real bulb/speaker images instead of letters) | **Still not working as of 2026-07-17.** See "Open bug 2" below — the only remaining open item. Cosmetic only; letters already work. |
 
 ## How it works
 
@@ -192,10 +192,14 @@ console as of this writing:
   discrepancy that was never resolved or explained. Worth checking if
   future path-based guesses keep failing.
 
-## Open bug 1: Restart doesn't clear the win line
+## Open bug 1 — RESOLVED: Restart doesn't clear the win line
 
-**Symptom:** after a win, hitting Restart redraws a fresh board but the old
-win-line stroke blocks stay visible on screen.
+**Symptom (historical):** after a win, hitting Restart redrew a fresh board
+but the old win-line stroke blocks stayed visible on screen.
+
+**Resolution confirmed on-console 2026-07-17, no errors.** Root cause was
+step 6 below (`Children()` as the primary tier). One loose end remains,
+noted after the attempt list.
 
 **Attempts, in order, all on the `try_delete`/`delete_last_ui_child` /
 `delete_ui_child_by_handle` code path in `TicTacToe.lua`:**
@@ -227,19 +231,32 @@ win-line stroke blocks stay visible on screen.
    `try_get_ui_children_count`/`try_get_ui_child` helpers, with `diag()`
    logging at every failure point on every call site — tested on console,
    **still broken**, no decisive error surfaced.
-6. **Current state (untested on console):** a third-party API reference
-   the user linked (github.com/MacTirney/GrandMA3-API-Documentation,
-   2026-07-17) documents `Children(handle)` with an actual working example
-   returning a real Lua table — stronger evidence than
-   `GetUIChildrenCount`/`GetUIChild`, which never had one. Now tried as the
-   primary tier ahead of the old dual-attempt (kept as fallback) in both
-   helpers.
+6. A third-party API reference the user linked
+   (github.com/MacTirney/GrandMA3-API-Documentation, 2026-07-17) documents
+   `Children(handle)` with an actual working example returning a real Lua
+   table — stronger evidence than `GetUIChildrenCount`/`GetUIChild`, which
+   never had one. Wired in as the primary tier ahead of the old
+   dual-attempt (kept as fallback) in both helpers — **this is what fixed
+   it**, confirmed on-console: line disappears on Restart, no errors.
+7. The same System Monitor capture that confirmed the fix also proved
+   something else definitively: `Delete(parent, 3) errored: attempt to
+   call a nil value (global 'Delete')` — the bare-global form of `Delete`
+   **does not exist on this build at all**. Not a naming guess gone wrong;
+   a confirmed nil global. Removed that dead branch from `try_delete`
+   entirely; only `parent:Delete(index)` (colon form) is called now, which
+   is what was actually doing the work all along once it was correctly
+   *reached* (steps 4–6 were about reaching it, not about which `Delete`
+   form works).
 
-**Next step if still broken:** get a fresh System Monitor screenshot right
-after a Restart click and read the `[TicTacToe] ...` diagnostic lines —
-they should now say whether `Children()` (colon or bare) resolved the
-children table, and if not, which of the older calling-convention
-combinations succeeded or failed.
+**Loose end (not chased further, low priority):** that same capture showed
+one `try_delete` call for a specific block (index 3) where the colon
+`Delete` call left the count unchanged — i.e. even the working form failed
+for at least one block in that pass, while the user's overall report was
+positive ("line disappears... no errors"). Possibly an edge case with the
+very last remaining block in a cleanup pass, or a stale/mixed capture from
+Command Line History scrollback. Worth a closer look only if the user
+starts seeing a *partial* residual line (a stub of 1-2 blocks) rather than
+the line fully clearing.
 
 ## Open bug 2: Pool icons not resolving (cosmetic — letters already work)
 
@@ -283,25 +300,46 @@ the intended lightbulb/speaker pool images.
    `DataPool().Symbols`, `CurrentDataPool().Symbols`). **Untested on
    console as of the commit that shipped it** — superseded by step 7
    before a console test happened.
-7. **Current approach (untested on console):** the same third-party
-   reference that surfaced `Children()` also has a working example,
-   `DataPool().Sequences[1]`, indexing a pool sub-collection with plain
-   **brackets** rather than `:Ptr()`. `resolve_icon_via_pool` now tries
-   `root[index]` first, `root:Ptr(index)` second, per each of the same 5
-   candidate root paths from step 6.
+7. The same third-party reference that surfaced `Children()` also has a
+   working example, `DataPool().Sequences[1]`, indexing a pool
+   sub-collection with plain **brackets** rather than `:Ptr()`.
+   `resolve_icon_via_pool` tried `root[index]` first, `root:Ptr(index)`
+   second, per each of the same 5 candidate root paths from step 6 —
+   **tested on console, still missed both.** System Monitor showed
+   `resolve_icon(bulb): neither bracket-index nor :Ptr() found index 38
+   via any candidate root path` (and the same for speaker/41) — a clean
+   miss, no errors, meaning the pool objects exist somewhere but none of
+   the 5 root paths × 2 indexing forms = 10 combinations tried actually
+   reaches them.
+8. **Current approach (untested on console):** the user then manually
+   selected the exact bulb/speaker images in the console's own Symbols
+   pool window and captured the command-line response:
+   `Not implemented: Call Image 2.38` / `Not implemented: Call Image
+   2.41`. This revealed the console's real native address for these
+   objects is **`page.index`** (`"2.38"`, `"2.41"`), not the flat index
+   this code had tried exclusively. Important nuance: `Not implemented`
+   was the response to that specific CLI click-driven action, not to
+   anything the plugin does — it says the "Call Image" command verb isn't
+   implemented on this build, not that Lua handle access with the page
+   included would fail too. Three page-qualified forms now tried per
+   candidate root, after the existing flat forms:
+   `root[page][index]`, `root[page]:Ptr(index)`, `root:Ptr(page, index)`
+   (`SYMBOL_POOL_PAGE = 2`).
 
-**Next step if still not working:** System Monitor after opening the
-plugin should show a `resolve_icon` diagnostic naming that neither
-bracket-index nor `:Ptr()` found the target index via any candidate root —
-that will tell us whether the problem is the *path to the pool* (still
-unconfirmed, unlike `ColorTheme`) or something deeper about how `Texture`
-accepts a `SymbolImage`-class handle specifically (never confirmed
-compatible, unlike `Color`-class handles for `BackColor`). If both indexing
-forms keep missing on every candidate root, that would be strong evidence
-the root path itself is wrong, not the indexing syntax — worth trying
-`Dump(Root())` (see "Ground truth source" above) manually in the console's
-Lua Input popup to see the real top-level property names, rather than
-continuing to guess root paths blindly.
+**Next step if still not working:** this is now 8 distinct approaches
+across 3 rounds, all misses, with the flat-index forms proven wrong by two
+separate lines of evidence (10 silent misses, plus the console's own
+`2.38` addressing). If the page-qualified forms ALSO miss, that points at
+the *root path* itself being wrong rather than the indexing syntax — at
+that point, stop guessing root paths and have the user run
+`Root():Dump()` (or similarly `Root().Symbols:Dump()` if that resolves at
+all) directly in the console's Lua Input popup (see `Dump()` under "Ground
+truth source" above). That prints the actual property names to Command
+Line History and ends the guessing entirely, likely faster than another
+round of screenshots. The user was asked directly (2026-07-17) whether to
+keep pursuing icons or accept letters as final, and chose one more
+attempt (this one) — worth asking again if this round also misses, since
+letters already work and are fully legible.
 
 ## Testing
 
