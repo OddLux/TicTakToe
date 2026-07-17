@@ -7,7 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Restart now clears the win-line stroke blocks -- confirmed working
+  on-console (2026-07-17), no errors. Root cause was the `GetUIChildrenCount`
+  and `Children()` fixes from prior rounds; this round additionally
+  confirmed via a real System Monitor capture that the bare-global
+  `Delete(parent, index)` form errors with "attempt to call a nil value" --
+  it does not exist on this build at all. Removed that dead attempt
+  entirely from `try_delete`; only `parent:Delete(index)` (colon form) is
+  called now, which is what was actually doing the work.
+
 ### Changed
+
+- Try page-qualified pool addressing (`page.index`, e.g. `"2.38"`) for icon
+  resolution, in addition to the existing flat-index forms. Ground truth
+  (2026-07-17): manually selecting the bulb/speaker images in the
+  console's own Symbols pool window produced native command-line responses
+  `Not implemented: Call Image 2.38` / `Not implemented: Call Image 2.41`
+  -- revealing the console's real addressing for these objects includes a
+  page component this code never tried. `Not implemented` was the
+  response to that specific CLI click-action, not to anything the plugin
+  does, so it doesn't rule out Lua handle access working with the page
+  included. Three page-qualified forms are tried per candidate root path
+  (`root[page][index]`, `root[page]:Ptr(index)`, `root:Ptr(page, index)`),
+  after the existing flat forms, all `pcall`-guarded and read-only.
 
 - Add `Children(handle)` as a new, better-evidenced primary tier for UI
   child enumeration (`try_get_ui_children_count`/`try_get_ui_child`),
