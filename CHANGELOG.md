@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Cell icons now come from MA3's stock image files on disk
+  (`gma3_<Version()>/shared/resource/lib_symbols/object/fixture1.png` for the
+  Lightbulb, `.../executor/executor_learnspeed.png` for the Speaker). Each one
+  is imported once into the Symbols pool as `TicTacToe_bulb` /
+  `TicTacToe_speaker` and reused after that. This replaces the pool-index
+  lookup (38/41), which never resolved on-console. The user approved this
+  one-time Import as an exception to the no-show-mutation contract. It's
+  gated on both the `.png` and `.png.xml` existing and on the target
+  collection's `GetChildClass()` being `SymbolImage`. A failed import removes
+  the slot it acquired. The `L`/`S` letters stay the baseline, and are all
+  that shows when MA3 lives elsewhere or the files are missing. Restart now
+  restores each played cell's build-time default `Texture`, so icons no longer
+  carry over into a new game. Untested on-console.
+
 ### Fixed
 
 - Restart now clears the win-line stroke blocks -- confirmed working

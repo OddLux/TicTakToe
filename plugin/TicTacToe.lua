@@ -7,14 +7,17 @@
 -- SAFETY CONTRACT (non-negotiable, see the header comments through the file):
 --   * No globals. Every symbol is `local`. We never write `_G` or monkeypatch
 --     an MA3 global.
---   * No show-data mutation. There are ZERO Cmd() calls in this file.
+--   * No show-data mutation, with ONE user-approved exception: a one-time
+--     Import() of the two icon files into the Symbols pool (SECTION 4).
+--     There are ZERO Cmd() calls in this file.
 --   * Every UI callback is wrapped in pcall -- a Lua error must never leak into
 --     MA3's UI thread.
 --   * We keep the handle to OUR BaseInput dialog and delete ONLY that on
 --     teardown. We deliberately DO NOT call ClearUIChildren() on the screen
 --     overlay (that would destroy other dialogs the user has open).
 --   * Activation is idempotent: re-running closes any existing instance first.
---   * No timers, no file I/O, no network.
+--   * No timers, no network. File access is limited to FileExists() checks
+--     and the icon Import() in SECTION 4; nothing is ever written to disk.
 --
 -- Plugin entry signature (file-scope varargs). These are community-documented
 -- for MA3 2.x and are NOT verified against a specific install; nothing below
@@ -247,6 +250,8 @@ local ui = {
     status = nil, -- status-line text object
     cells = {}, -- 9 cell button handles
     stroke_blocks = {}, -- win-line block handles (direct children of dialog)
+    cell_default_texture = {}, -- per-cell Texture read right after build
+    cell_has_icon = {}, -- idx -> true once an icon Texture was applied
 }
 
 -- =====================================================================
@@ -536,41 +541,36 @@ end
 -- =====================================================================
 -- SECTION 4 -- SYMBOL / GLYPH RESOLUTION
 -- ---------------------------------------------------------------------
--- Letter text is the GUARANTEED baseline. Confirmed on-console (2026-07-16)
--- twice over: assigning Texture a raw guessed icon NAME string ("object_
--- light"/"object_audio") makes MA3 try to resolve it as an object address
--- and breaks silently; separately, emoji glyphs in Text never appeared even
--- though board state was tracking correctly, most likely a font gap. Both
--- failures are invisible to safe_set's pcall+read-back check. Plain ASCII
--- letters are the one form proven to render, so `Text` is ALWAYS set to the
--- letter first, unconditionally -- never removed, regardless of anything
--- below.
+-- Letter text is the GUARANTEED baseline. Confirmed on-console (2026-07-16):
+-- raw guessed icon-name strings on Texture break silently, and emoji glyphs
+-- in Text never render (font gap). Plain ASCII letters are the one form
+-- proven to render, so `Text` is ALWAYS set to the letter first,
+-- unconditionally -- never removed, regardless of anything below.
 --
--- Real pool icons layer ON TOP of that baseline, best-effort.
+-- Real icons layer ON TOP of that baseline, best-effort, sourced from the
+-- console's own stock image files on disk (2026-09-26 requirement change):
+--   <MA data root>/gma3_<X.Y.Z>/shared/resource/lib_symbols/object/fixture1.png
+--   <MA data root>/gma3_<X.Y.Z>/shared/resource/lib_symbols/executor/
+--       executor_learnspeed.png
+-- These are exactly the images the user picked in the console's own
+-- "Select Image for Import" browser (screenshots 20260716_212046 = bulb,
+-- 20260716_212026 = note). <X.Y.Z> comes from the running Version(), so a
+-- console only ever reads its own version's files. If MA3 lives somewhere
+-- else, or the files are missing, nothing is imported and the letters stay.
 --
--- First attempt (2026-07-16) used the show's custom Symbols pool item
--- names ("fixture1_png"/"user_png") -- FindTexture called fine (no error)
--- but found neither. Confirmed via System Monitor 2026-07-17.
---
--- Second attempt uses the CONSOLE'S OWN BUILT-IN library instead, per
--- exact file paths the user located and confirmed in the "Select Image for
--- Import" browser (Internal library, 2026-07-17):
---   lightbulb: C:/ProgramData/MALightingTechnology/gma3_2.4.2/shared/
---              resource/lib_symbols/object/fixture1.png
---   speaker:   C:/ProgramData/MALightingTechnology/gma3_2.4.2/shared/
---              resource/lib_symbols/executor/executor_learnspeed.png
--- Built-in stock icons are more likely to already be registered wherever
--- FindTexture actually searches than a show-specific custom pool item, so
--- several candidate string forms are tried, from most to least specific:
--- full absolute path, path relative to lib_symbols/, bare file name.
---
--- `FindTexture(string:texture_name): light_userdata:handle` is a documented
--- global (HelpLua dump) that resolves an EXISTING image to a real handle
--- -- read-only, nothing created or modified, same shape as the working
--- BackColor-via-theme-handle fix. If FindTexture returns nothing for any
--- candidate, or the Texture write itself fails, the letter underneath is
--- what the user sees -- there is no code path that can end with a blank
--- cell again.
+-- Eight read-only attempts (FindTexture by name/path, flat and page.index
+-- pool lookups) all missed, so the user explicitly relaxed the safety
+-- contract for this ONE case: a one-time Import() into the show's Symbols
+-- pool. Bounds on that exception:
+--   * Only when both the .png and its .png.xml sidecar exist on disk
+--     (Import() reads the XML object description, which points at the png).
+--   * Only into a collection whose GetChildClass() is "SymbolImage" -- a
+--     wrong root path can never receive an Acquire().
+--   * Idempotent across activations: imported entries are named
+--     "TicTacToe_bulb"/"TicTacToe_speaker" and found by name first, so a
+--     show gets at most one entry per player, ever.
+--   * A failed import removes the slot it just acquired.
+-- No Cmd() anywhere; this is still the only show-data write in the file.
 -- =====================================================================
 
 local SYMBOLS = {
@@ -578,113 +578,159 @@ local SYMBOLS = {
     speaker = "S",
 }
 
--- ---------------------------------------------------------------------
--- Third approach (2026-07-17): FindTexture never matched any of five
--- distinct string forms tried across two rounds (custom pool item name,
--- three forms of a built-in library file path) despite calling fine every
--- time -- five misses with zero errors is a real signal that FindTexture
--- doesn't index by any guessable string at all, not just a naming miss.
---
--- The user's own question prompted a better approach: DON'T import or
--- string-match anything. The built-in symbols ("fixture1_png" at pool
--- index 38, "user_png" at index 41 -- confirmed via the pool editor
--- screenshots, 2026-07-16) already EXIST as real pool objects. Navigate to
--- them directly, the exact same proven way `resolve_stroke_color` already
--- reaches `Root().ColorTheme.ColorGroups.Global` successfully (dot-path
--- navigation off Root(), then `:Count()`/`:Ptr(index)` -- the documented,
--- working generic Object API, not FindTexture). This is read-only: it
--- looks up an EXISTING object, nothing is imported, created, or modified,
--- same safety shape as the color fix.
---
--- Exact property path from Root() to the Symbols pool isn't confirmed
--- (unlike ColorTheme.ColorGroups.Global, which is proven), so several
--- plausible paths are tried defensively, most to least likely.
--- ---------------------------------------------------------------------
+local MA_DATA_ROOT = "C:/ProgramData/MALightingTechnology"
 
-local SYMBOL_POOL_INDEX = {
-    bulb = 38, -- fixture1_png
-    speaker = 41, -- user_png
+local ICON_FILES = {
+    bulb = { subdir = "object", file = "fixture1.png" },
+    speaker = { subdir = "executor", file = "executor_learnspeed.png" },
 }
 
--- Page component of the pool address. Ground truth (2026-07-17): manually
--- selecting these exact images in the console's own Symbols pool window
--- produced the command-line responses "Not implemented: Call Image 2.38"
--- and "Not implemented: Call Image 2.41" -- the console's own native
--- addressing for these objects is the two-part "2.38" / "2.41" (page.index),
--- not the flat index this code tried until now. "Not implemented" was the
--- response to that specific CLICK-driven CLI action, not to anything this
--- plugin does -- it says nothing about whether Lua handle-based access
--- with the page included would work, only that the page component is real.
-local SYMBOL_POOL_PAGE = 2
+local ICON_POOL_NAMES = {
+    bulb = "TicTacToe_bulb",
+    speaker = "TicTacToe_speaker",
+}
 
--- Candidate root paths to the Symbols pool, most to least likely. Same
--- uncertainty as before (unlike ColorTheme.ColorGroups.Global, this path
--- isn't proven), so several are tried.
-local SYMBOL_ROOT_CANDIDATES = {
+-- Pool child class taken from the sidecar XML itself
+-- (<SymbolImage FileName="fixture1.png" FilePath="object"/>).
+local SYMBOL_CLASS = "SymbolImage"
+
+-- Candidate paths to the Symbols pool, most to least likely. The console
+-- addresses these images as "Image 2.38" / "Image 2.41" (2026-07-17), which
+-- reads as media pool 2 (Symbols), item 38 -- hence MediaPools first. Every
+-- candidate must still pass the SymbolImage child-class gate before use.
+local SYMBOL_POOL_CANDIDATES = {
+    function() return ShowData().MediaPools.Symbols end,
+    function() return Root().ShowData.MediaPools.Symbols end,
+    function() return ShowData().MediaPools:Ptr(2) end,
+    function() return Root().ShowData.MediaPools:Ptr(2) end,
     function() return Root().Symbols end,
-    function() return Root().DataPools.Symbols end,
-    function() return Root().ShowData.Symbols end,
     function() return DataPool().Symbols end,
-    function() return CurrentDataPool().Symbols end,
 }
 
--- Second lead from the user's linked third-party API reference
--- (github.com/MacTirney/GrandMA3-API-Documentation, 2026-07-17): a working
--- example indexes a DataPool sub-collection with plain BRACKET syntax --
--- `DataPool().Sequences[1]` -- not the `:Count()`/`:Ptr(index)` colon-method
--- pattern used for `Root().ColorTheme.ColorGroups.Global`. That pattern was
--- itself evidenced (color lookup is confirmed working on-console), but
--- Symbols may behave like Sequences rather than like ColorTheme -- unknown
--- which, so for each root candidate both `root[index]` (bracket) and
--- `root:Ptr(index)` (colon) are tried, bracket first per the newer, more
--- directly-evidenced example.
-local function resolve_icon_via_pool(player)
-    local index = SYMBOL_POOL_INDEX[player]
-    local page = SYMBOL_POOL_PAGE
-    for _, get_root in ipairs(SYMBOL_ROOT_CANDIDATES) do
-        local root = nil
-        local get_ok = pcall(function()
-            root = get_root()
-        end)
-        if get_ok and root ~= nil then
-            -- Flat forms (page not included), tried first as before.
-            local bracket_ok, bracket_val = pcall(function()
-                return root[index]
-            end)
-            if bracket_ok and bracket_val ~= nil then
-                return bracket_val
-            end
-            local ptr_ok, ptr_val = pcall(function()
-                return root:Ptr(index)
-            end)
-            if ptr_ok and ptr_val ~= nil then
-                return ptr_val
-            end
+-- Return the lib_symbols directory for the running MA3 version, or nil.
+local function lib_symbols_dir()
+    local ok, ver = pcall(Version)
+    if not ok or type(ver) ~= "string" then
+        diag("icons: Version() unavailable -- using letters")
+        return nil
+    end
+    local short = ver:match("^(%d+%.%d+%.%d+)")
+    if short == nil then
+        diag("icons: unexpected Version() format '" .. ver .. "' -- using letters")
+        return nil
+    end
+    return MA_DATA_ROOT .. "/gma3_" .. short .. "/shared/resource/lib_symbols"
+end
 
-            -- Page-qualified forms ("2.38"), per the console's own native
-            -- addressing for this object -- tried defensively, several
-            -- shapes since which one Lua expects isn't confirmed.
-            local nested_ok, nested_val = pcall(function()
-                return root[page][index]
+local function file_exists(path)
+    local ok, found = pcall(FileExists, path)
+    return ok and found == true
+end
+
+-- Return dir, xml_name for a player's icon, or nil if either file is missing.
+local function find_icon_file(player)
+    local base = lib_symbols_dir()
+    if base == nil then
+        return nil
+    end
+    local spec = ICON_FILES[player]
+    local dir = base .. "/" .. spec.subdir
+    local png = dir .. "/" .. spec.file
+    local xml_name = spec.file .. ".xml"
+    if not file_exists(png) or not file_exists(dir .. "/" .. xml_name) then
+        diag("icons: " .. png .. " (or its .xml) not found -- using letters")
+        return nil
+    end
+    return dir, xml_name
+end
+
+-- Resolve the Symbols pool, accepting only a collection of SymbolImage.
+local function resolve_symbols_pool()
+    for _, get_pool in ipairs(SYMBOL_POOL_CANDIDATES) do
+        local ok, pool = pcall(get_pool)
+        if ok and pool ~= nil then
+            local cls_ok, cls = pcall(function()
+                return pool:GetChildClass()
             end)
-            if nested_ok and nested_val ~= nil then
-                return nested_val
-            end
-            local nested_ptr_ok, nested_ptr_val = pcall(function()
-                return root[page]:Ptr(index)
-            end)
-            if nested_ptr_ok and nested_ptr_val ~= nil then
-                return nested_ptr_val
-            end
-            local two_arg_ok, two_arg_val = pcall(function()
-                return root:Ptr(page, index)
-            end)
-            if two_arg_ok and two_arg_val ~= nil then
-                return two_arg_val
+            if cls_ok and cls == SYMBOL_CLASS then
+                return pool
             end
         end
     end
+    diag("icons: no Symbols pool (child class " .. SYMBOL_CLASS .. ") found")
     return nil
+end
+
+-- Find a pool child by exact Name. Find() first, then a Children() scan.
+local function find_by_name(pool, name)
+    local ok, found = pcall(function()
+        return pool:Find(name)
+    end)
+    if ok and found ~= nil then
+        return found
+    end
+    local children = try_get_children_table(pool, "find_by_name")
+    for _, child in ipairs(children or {}) do
+        local name_ok, child_name = pcall(function()
+            return child.Name
+        end)
+        if name_ok and child_name == name then
+            return child
+        end
+    end
+    return nil
+end
+
+-- Remove `obj` from `pool` after a failed import, so no empty slot is left.
+local function discard_pool_entry(pool, obj)
+    local children = try_get_children_table(pool, "discard_pool_entry")
+    for idx, child in ipairs(children or {}) do
+        if child == obj then
+            try_delete(pool, idx)
+            return
+        end
+    end
+    diag("icons: could not locate failed import slot to remove it")
+end
+
+-- Import a player's icon file into the Symbols pool, once per show.
+local function import_icon(player)
+    local dir, xml_name = find_icon_file(player)
+    if dir == nil then
+        return nil
+    end
+    local pool = resolve_symbols_pool()
+    if pool == nil then
+        return nil
+    end
+
+    local name = ICON_POOL_NAMES[player]
+    local existing = find_by_name(pool, name)
+    if existing ~= nil then
+        return existing
+    end
+
+    local acq_ok, obj = pcall(function()
+        return pool:Acquire()
+    end)
+    if not acq_ok or obj == nil then
+        diag("icons: Acquire() on Symbols pool failed: " .. tostring(obj))
+        return nil
+    end
+    local imp_ok, imported = pcall(function()
+        return obj:Import(dir, xml_name)
+    end)
+    if not imp_ok or not imported then
+        diag("icons: Import(" .. dir .. ", " .. xml_name .. ") failed: " ..
+            tostring(imported))
+        discard_pool_entry(pool, obj)
+        return nil
+    end
+    -- Name AFTER import: the XML load may reset properties. The name is what
+    -- makes later activations reuse this entry instead of importing again.
+    safe_set(obj, "Name", name)
+    diag("icons: imported " .. xml_name .. " as " .. name)
+    return obj
 end
 
 -- Resolved once per activation, lazily, and cached. nil entries mean "not
@@ -696,42 +742,49 @@ local function resolve_icon(player)
     if icon_handles[player] ~= nil then
         return icon_handles[player]
     end
-
-    local found = resolve_icon_via_pool(player)
-    if found == nil then
-        diag("resolve_icon(" .. player .. "): neither bracket-index nor :Ptr() " ..
-            "found index " .. SYMBOL_POOL_INDEX[player] .. " via any candidate root path")
-    end
-
+    local found = import_icon(player)
     icon_handles[player] = found or false -- false = "tried, not found"
     return found
 end
 
--- Apply a player's symbol to a cell button. Letter first, always; icon is a
+-- Apply a player's symbol to cell `idx`. Letter first, always; icon is a
 -- best-effort visual upgrade layered on top, never a replacement path.
-local function apply_symbol(cell, player)
+local function apply_symbol(idx, player)
+    local cell = ui.cells[idx]
     if cell == nil or player == nil then
         return
     end
     safe_set(cell, "Text", SYMBOLS[player])
     local icon = resolve_icon(player)
     if icon then
+        -- Tracked on ANY attempt: a read-back mismatch doesn't prove the
+        -- write failed, and an untracked icon would survive Restart.
         safe_set(cell, "Texture", icon)
+        ui.cell_has_icon[idx] = true
     end
 end
 
-local function clear_symbol(cell)
+local function clear_symbol(idx)
+    local cell = ui.cells[idx]
     if cell == nil then
         return
     end
-    -- NO Texture-clearing. Confirmed the regression source (2026-07-17):
-    -- clear_symbol runs on every empty cell, on every refresh, including
-    -- the very first reset_game() before any move -- so an empty-string
-    -- Texture assignment here rendered the WHOLE grid black from the
-    -- moment the window opened. There is no verified-working way to clear
-    -- a texture on this build, and nothing currently sets one successfully
-    -- either (see resolve_icon), so there's nothing to clear.
     safe_set(cell, "Text", "")
+    -- Texture is touched ONLY on a cell that actually received an icon, and
+    -- only to restore the exact value it had when built. Confirmed regression
+    -- source (2026-07-17): writing an empty-string Texture on every empty
+    -- cell, on every refresh, rendered the WHOLE grid black from the moment
+    -- the window opened. Restoring the cell's own build-time default is the
+    -- only reset that can't introduce a value the cell never had.
+    if ui.cell_has_icon[idx] then
+        local default = ui.cell_default_texture[idx]
+        if default ~= nil then
+            safe_set(cell, "Texture", default)
+        else
+            diag("clear_symbol: cell " .. idx .. " has no readable default Texture")
+        end
+        ui.cell_has_icon[idx] = nil
+    end
 end
 
 -- =====================================================================
@@ -1006,12 +1059,11 @@ local function refresh_view()
     pcall(function()
         safe_set(ui.status, "Text", status_text())
         for idx = 1, 9 do
-            local cell = ui.cells[idx]
             local owner = game.board[idx]
             if owner == nil then
-                clear_symbol(cell)
+                clear_symbol(idx)
             else
-                apply_symbol(cell, owner)
+                apply_symbol(idx, owner)
             end
         end
     end)
@@ -1075,6 +1127,8 @@ local function teardown()
     ui.dialog = nil
     ui.status = nil
     ui.cells = {}
+    ui.cell_default_texture = {}
+    ui.cell_has_icon = {}
     ui.stroke_blocks = {}
     stroke_color = nil -- do not hold a handle across instances
     icon_handles = {} -- likewise for resolved icon texture handles
@@ -1187,6 +1241,11 @@ local function build_ui()
         local cell = safe_append(dialog, "Button")
         ui.cells[idx] = cell
         if cell ~= nil then
+            -- Remember the untouched default so clear_symbol can restore it.
+            local tex_ok, tex = pcall(function()
+                return cell.Texture
+            end)
+            ui.cell_default_texture[idx] = tex_ok and tex or nil
             -- Absolute layout. Confirmed working on-console: the resulting
             -- 480x480 grid footprint is visible in screenshots.
             safe_set(cell, "X", cell_col(idx) * CELL_PX)
