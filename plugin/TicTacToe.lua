@@ -250,8 +250,7 @@ local ui = {
     status = nil, -- status-line text object
     cells = {}, -- 9 cell button handles
     stroke_blocks = {}, -- win-line block handles (direct children of dialog)
-    cell_default_texture = {}, -- per-cell Texture read right after build
-    cell_has_icon = {}, -- idx -> true once an icon Texture was applied
+    cell_previews = {}, -- idx -> AppearancePreview drawing that cell's icon
 }
 
 -- =====================================================================
@@ -747,46 +746,6 @@ local function resolve_icon(player)
     return found
 end
 
--- Apply a player's symbol to cell `idx`. Letter first, always; icon is a
--- best-effort visual upgrade layered on top, never a replacement path.
-local function apply_symbol(idx, player)
-    local cell = ui.cells[idx]
-    if cell == nil or player == nil then
-        return
-    end
-    safe_set(cell, "Text", SYMBOLS[player])
-    local icon = resolve_icon(player)
-    if icon then
-        -- Tracked on ANY attempt: a read-back mismatch doesn't prove the
-        -- write failed, and an untracked icon would survive Restart.
-        safe_set(cell, "Texture", icon)
-        ui.cell_has_icon[idx] = true
-    end
-end
-
-local function clear_symbol(idx)
-    local cell = ui.cells[idx]
-    if cell == nil then
-        return
-    end
-    safe_set(cell, "Text", "")
-    -- Texture is touched ONLY on a cell that actually received an icon, and
-    -- only to restore the exact value it had when built. Confirmed regression
-    -- source (2026-07-17): writing an empty-string Texture on every empty
-    -- cell, on every refresh, rendered the WHOLE grid black from the moment
-    -- the window opened. Restoring the cell's own build-time default is the
-    -- only reset that can't introduce a value the cell never had.
-    if ui.cell_has_icon[idx] then
-        local default = ui.cell_default_texture[idx]
-        if default ~= nil then
-            safe_set(cell, "Texture", default)
-        else
-            diag("clear_symbol: cell " .. idx .. " has no readable default Texture")
-        end
-        ui.cell_has_icon[idx] = nil
-    end
-end
-
 -- =====================================================================
 -- SECTION 5 -- SAMPLED-STROKE RENDERING + FALLBACK CHAIN
 -- ---------------------------------------------------------------------
@@ -1040,6 +999,80 @@ local function draw_win_stroke(outcome)
     render_elbow_bars(path)
 end
 
+-- ---------------------------------------------------------------------
+-- Drawing the icon. NEVER via a cell's `Texture`: MA's own UI code
+-- (gma3_2.4.2 lib_menus) uses Texture only for a widget's BACKGROUND FRAME
+-- ("corner1", TextureCollect.Textures["frame15"]). Confirmed on-console
+-- 2026-09-26: assigning the imported SymbolImage to Texture wiped the cell
+-- background and drew no image -- the same failure as the 2026-07-17
+-- black-grid bug (Texture = "").
+--
+-- MA's own image editor shows a pool image with an `AppearancePreview`
+-- widget: `Frame.Preview.Appearance = target` (image_editor.lua), where
+-- target is the image object itself. So each occupied cell gets one
+-- AppearancePreview laid over it, created lazily the first time that cell
+-- shows an icon and reused after. Lazy creation matters: nothing sits on top
+-- of an empty cell unless it has held an icon, and a cleared preview is
+-- hidden AND shrunk to 0x0 so it can't swallow the cell's clicks even if
+-- `Visible` isn't honored. Previews are appended during play, before any
+-- win stroke, so the stroke blocks stay the last children (clear_stroke
+-- relies on that).
+-- ---------------------------------------------------------------------
+local ICON_INSET = 16 -- px of cell visible around the icon
+
+local function show_icon_preview(idx, icon)
+    local preview = ui.cell_previews[idx]
+    if preview == nil then
+        preview = safe_append(ui.dialog, "AppearancePreview")
+        if preview == nil then
+            diag("icons: could not append AppearancePreview for cell " .. idx)
+            return
+        end
+        ui.cell_previews[idx] = preview
+    end
+    safe_set(preview, "X", cell_col(idx) * CELL_PX + ICON_INSET)
+    safe_set(preview, "Y", cell_row(idx) * CELL_PX + GRID_Y + ICON_INSET)
+    safe_set(preview, "W", CELL_PX - 6 - 2 * ICON_INSET)
+    safe_set(preview, "H", CELL_PX - 6 - 2 * ICON_INSET)
+    safe_set(preview, "Appearance", icon)
+    safe_set(preview, "Visible", true)
+end
+
+local function hide_icon_preview(idx)
+    local preview = ui.cell_previews[idx]
+    if preview == nil then
+        return
+    end
+    safe_set(preview, "Visible", false)
+    safe_set(preview, "W", 0)
+    safe_set(preview, "H", 0)
+    -- Same clear MA uses itself (view_store_option.lua: `.Appearance = nil`).
+    safe_set(preview, "Appearance", nil)
+end
+
+-- Apply a player's symbol to cell `idx`. Letter first, always; icon is a
+-- best-effort visual upgrade layered on top, never a replacement path.
+local function apply_symbol(idx, player)
+    local cell = ui.cells[idx]
+    if cell == nil or player == nil then
+        return
+    end
+    safe_set(cell, "Text", SYMBOLS[player])
+    local icon = resolve_icon(player)
+    if icon then
+        show_icon_preview(idx, icon)
+    end
+end
+
+local function clear_symbol(idx)
+    local cell = ui.cells[idx]
+    if cell == nil then
+        return
+    end
+    safe_set(cell, "Text", "")
+    hide_icon_preview(idx)
+end
+
 -- =====================================================================
 -- SECTION 6 -- VIEW SYNC
 -- =====================================================================
@@ -1127,8 +1160,7 @@ local function teardown()
     ui.dialog = nil
     ui.status = nil
     ui.cells = {}
-    ui.cell_default_texture = {}
-    ui.cell_has_icon = {}
+    ui.cell_previews = {}
     ui.stroke_blocks = {}
     stroke_color = nil -- do not hold a handle across instances
     icon_handles = {} -- likewise for resolved icon texture handles
@@ -1241,11 +1273,6 @@ local function build_ui()
         local cell = safe_append(dialog, "Button")
         ui.cells[idx] = cell
         if cell ~= nil then
-            -- Remember the untouched default so clear_symbol can restore it.
-            local tex_ok, tex = pcall(function()
-                return cell.Texture
-            end)
-            ui.cell_default_texture[idx] = tex_ok and tex or nil
             -- Absolute layout. Confirmed working on-console: the resulting
             -- 480x480 grid footprint is visible in screenshots.
             safe_set(cell, "X", cell_col(idx) * CELL_PX)
