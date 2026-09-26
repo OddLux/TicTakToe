@@ -24,9 +24,39 @@ plugin/
   TicTacToe.lua      -- the whole implementation (logic + UI)
   TicTacToe.xml      -- Plugins-pool wrapper that references TicTacToe.lua
   test_logic.lua     -- standalone headless rig proof (no MA3 needed)
+  TicTacToeClassic.lua  -- classic (unrigged) variant, see below
+  TicTacToeClassic.xml  -- Plugins-pool wrapper for the classic variant
+  test_classic_ui.lua   -- headless test for the classic variant
 docs/
   INSTALL.md         -- this file
 ```
+
+### Classic variant (`TicTacToeClassic`)
+
+A separate plugin with standard rules: **X** moves first, three in a row
+wins (for either player), and a full board with no line is a **draw**. The
+status line reads `X's turn` / `O's turn`, then `X wins!`, `O wins!` or
+`Draw!`. The winning line is struck through; a draw has no strike.
+
+Install it exactly like the rigged plugin, using `TicTacToeClassic.xml` +
+`TicTacToeClassic.lua`. The two plugins are fully independent and can both
+be in the pool at once.
+
+**Symbols.** Every mark always shows the letter `X` or `O`. On top of that
+it shows MA3's stock icons from the running version's install folder:
+
+```
+C:/ProgramData/MALightingTechnology/gma3_<version>/shared/resource/lib_symbols/symbols/x_mark_black.png
+C:/ProgramData/MALightingTechnology/gma3_<version>/shared/resource/lib_symbols/symbols/outline_circle_black.png
+```
+
+They're imported once into the Symbols pool as `TicTacToeClassic_x` /
+`TicTacToeClassic_o` and reused on later runs. Same rules as the rigged
+plugin: if the files (or their `.png.xml` sidecars) are missing, or the import
+fails, nothing is added to the show and the plain `X` / `O` letters are used.
+
+Test it headless:
+`uv run --with lupa python -c "from lupa import LuaRuntime; LuaRuntime().execute(open('plugin/test_classic_ui.lua').read())"`
 
 ---
 

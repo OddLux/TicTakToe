@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New separate plugin `TicTacToeClassic` (`plugin/TicTacToeClassic.lua` +
+  `.xml`): classic tic tac toe with no rigging. X moves first, either player
+  wins with three in a row, and a full board with no line is a draw. Cells
+  show MA3's stock `lib_symbols/symbols/x_mark_black.png` and
+  `outline_circle_black.png`, imported once as `TicTacToeClassic_x/_o` and
+  drawn with the proven `AppearancePreview` mechanism. It falls back to plain
+  `X`/`O` letters. It has its own callbacks, dialog and pool entries, so it
+  never interferes with the rigged `TicTacToe` plugin. `test_classic_ui.lua`
+  covers the UI, the icons, X-win/O-win/draw and the fallbacks, and checks
+  every legal game against the known totals (131184 X wins / 77904 O wins /
+  46080 draws). Untested on-console.
+
 - Cell icons now come from MA3's stock image files on disk
   (`gma3_<Version()>/shared/resource/lib_symbols/object/fixture1.png` for the
   Lightbulb, `.../executor/executor_learnspeed.png` for the Speaker). Each one
