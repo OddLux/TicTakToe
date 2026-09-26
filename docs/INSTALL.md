@@ -10,7 +10,8 @@ Player 1 is the **Lightbulb** (💡), Player 2 is the **Speaker** (🔊).
 > it and hands the win to the Lightbulb, drawing a strike line (bending across
 > three Lightbulb cells when they are not in a straight line).
 
-The plugin is deliberately conservative: it never touches show data, wraps
+The plugin is deliberately conservative: its only show-data write is a
+one-time import of two icons into the Symbols pool. It wraps
 every UI callback so a Lua error cannot leak into the console, and tears down
 only its own dialog. See "Safety" below.
 
