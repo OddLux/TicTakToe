@@ -2,7 +2,7 @@
 topic: tictactoe-plugin
 area: plugin/TicTacToe.lua
 tickets: []
-updated: 2026-07-17
+updated: 2026-09-26
 ---
 
 # Rigged Tic Tac Toe Plugin (grandMA3)
@@ -27,7 +27,7 @@ placeholder name only; treat that as cosmetic, not a real ticket reference.
 | Win-line rendering + color | **Confirmed working on-console** (a diagonal win produced a visible colored line). |
 | Layout (grid vs title bar / close button) | **Believed fixed**, not independently re-confirmed after the `GRID_Y` bump to 64px. |
 | Restart clears the win line | **Confirmed working on-console, 2026-07-17.** No errors. Fixed by the `Children()` primary tier; see "Open bug 1 — RESOLVED" below for the full chain and one loose end. |
-| Pool icons (real bulb/speaker images instead of letters) | **Still not working as of 2026-07-17.** See "Open bug 2" below — the only remaining open item. Cosmetic only; letters already work. |
+| Pool icons (real bulb/speaker images instead of letters) | **Reworked 2026-09-26, untested on console.** Now imported once from the stock files on disk. See "Open bug 2", step 9. Cosmetic only; letters already work. |
 
 ## How it works
 
@@ -95,12 +95,14 @@ every stroke strategy fails).
   last resort. `Text` is always set first, before any icon/texture attempt;
   nothing downstream is allowed to clear or replace it. This is why the
   game has stayed playable through every icon experiment below.
-- **No `:Acquire()` for color** (would create a persistent color-pool entry
-  — real show mutation) and **no `Import()` for icons** (would
-  create/modify a pool entry on every activation, same problem). Both were
-  considered and explicitly rejected; only read-only lookups of
-  *already-existing* show objects are used (see the color and icon
-  sections below).
+- **No `:Acquire()` for color** (would create a persistent color-pool entry,
+  which is real show mutation). Color uses read-only lookups only.
+- **One sanctioned show write: icon `Import()` (user-approved 2026-09-26).**
+  Each icon is imported at most once per show into a collection whose
+  `GetChildClass()` is `SymbolImage`, named `TicTacToe_bulb` /
+  `TicTacToe_speaker`, and found by name on every later activation. It only
+  runs if both the `.png` and `.png.xml` exist, and a failed import removes
+  its slot. Don't widen this exception. Everything else stays read-only.
 - **Idempotent activation.** Re-running the plugin tears down any prior
   instance first; never stacks duplicate overlays.
 
@@ -326,7 +328,25 @@ the intended lightbulb/speaker pool images.
    `root[page][index]`, `root[page]:Ptr(index)`, `root:Ptr(page, index)`
    (`SYMBOL_POOL_PAGE = 2`).
 
-**Next step if still not working:** this is now 8 distinct approaches
+9. **Current approach (2026-09-26, untested on console).** The user changed
+   the requirement: use the files on disk, and fall back to `L`/`S` if
+   they're absent. They also approved a one-time `Import()`. Their two named
+   screenshots (`gma3_library/media/images/20260716_212046_display1.png` =
+   bulb, `..._212026_...` = note) turned out to be full 3840x2054 captures of
+   the Import browser, not icons. With the user's agreement, the plugin uses
+   the stock files those screenshots show:
+   `gma3_<Version() X.Y.Z>/shared/resource/lib_symbols/object/fixture1.png`
+   and `.../executor/executor_learnspeed.png`. Each has a `.png.xml` sidecar
+   (`<SymbolImage FileName=... FilePath=.../>`), and that sidecar is what
+   `obj:Import(dir, "<file>.png.xml")` loads. The pool is found at
+   `ShowData().MediaPools.Symbols` first. The "Image 2.38" address reads as
+   media pool 2 (Symbols), item 38, which suggests step 8's "page" theory was
+   wrong. Restart restores each played cell's build-time `Texture`, because
+   working icons would otherwise persist.
+   Known risk: `gma3_2.3.2` has the pngs but **no** `.png.xml` sidecars, so a
+   2.3.2 console gets letters only.
+
+**Next step if step 9 still does not show icons** (older note, still applies): this is now 8 distinct approaches
 across 3 rounds, all misses, with the flat-index forms proven wrong by two
 separate lines of evidence (10 silent misses, plus the console's own
 `2.38` addressing). If the page-qualified forms ALSO miss, that points at

@@ -20,6 +20,10 @@
 -- Fake MA3 object model
 -- ---------------------------------------------------------------------
 
+-- Stand-in for whatever Texture value a fresh MA3 Button carries. clear_symbol
+-- must restore exactly this after Restart, and never write anything else.
+local DEFAULT_TEX = "default_button_texture"
+
 local function new_obj(class)
     local obj = {}
     obj._class = class
@@ -27,6 +31,9 @@ local function new_obj(class)
     obj.Append = function(self, cls)
         local child = new_obj(cls)
         child._parent = self
+        if cls == "Button" then
+            child.Texture = DEFAULT_TEX
+        end
         self._children[#self._children + 1] = child
         return child
     end
@@ -105,22 +112,68 @@ end
 local color_group = new_obj("ColorGroup")
 color_group._children = { fake_color("Background"), fake_color("Selected") }
 
--- Fake Symbols pool: real pool objects at the exact page.index address
--- resolve_icon looks up (2.38 = bulb, 2.41 = speaker), matching BOTH the
--- pool editor screenshots (2026-07-16, flat 38/41) AND the console's own
--- native "Call Image 2.38" / "Call Image 2.41" addressing observed
--- 2026-07-17. Flat indices deliberately left EMPTY here (only the
--- page-nested form is populated) so this test actually exercises the
--- page-qualified tiers in `resolve_icon_via_pool`, not just the flat ones
--- already proven by the (real, on-console) evidence that flat access
--- alone doesn't resolve these objects.
-local BULB_TEXTURE = new_obj("SymbolImage")
-local SPEAKER_TEXTURE = new_obj("SymbolImage")
-local symbols_pool = new_obj("SymbolsPool")
-symbols_pool[2] = { [38] = BULB_TEXTURE, [41] = SPEAKER_TEXTURE }
+-- Fake icon files + Symbols pool (2026-09-26 file-based icons). The plugin
+-- derives lib_symbols from Version(), checks FileExists() for the png AND its
+-- .png.xml sidecar, and imports the xml once into ShowData().MediaPools.Symbols
+-- (gated on GetChildClass() == "SymbolImage"). The knobs below let the
+-- fallback section simulate missing files, a wrong-class pool, and a failed
+-- Import().
+local LIB = "C:/ProgramData/MALightingTechnology/gma3_2.4.2/shared/resource/lib_symbols"
+local files_present = true
+local import_succeeds = true
+local pool_child_class = "SymbolImage"
+local import_log = {}
+local acquire_count = 0
+
+function Version() -- luacheck: ignore
+    return "2.4.2.2"
+end
+
+local KNOWN_FILES = {
+    [LIB .. "/object/fixture1.png"] = true,
+    [LIB .. "/object/fixture1.png.xml"] = true,
+    [LIB .. "/executor/executor_learnspeed.png"] = true,
+    [LIB .. "/executor/executor_learnspeed.png.xml"] = true,
+}
+
+function FileExists(path) -- luacheck: ignore
+    return files_present and KNOWN_FILES[path] == true
+end
+
+local function new_symbols_pool()
+    local pool = new_obj("Symbols")
+    pool.GetChildClass = function()
+        return pool_child_class
+    end
+    pool.Find = function(self, name)
+        for _, chd in ipairs(self._children) do
+            if chd.Name == name then
+                return chd
+            end
+        end
+        return nil
+    end
+    pool.Acquire = function(self)
+        acquire_count = acquire_count + 1
+        local img = self:Append("SymbolImage")
+        img.Import = function(obj, dir, file_name)
+            import_log[#import_log + 1] = { dir = dir, file = file_name }
+            obj.Name = "from_xml" -- Import may reset the name; plugin renames after
+            return import_succeeds
+        end
+        return img
+    end
+    return pool
+end
+
+local symbols_pool = new_symbols_pool()
+
+function ShowData() -- luacheck: ignore
+    return { MediaPools = { Symbols = symbols_pool } }
+end
 
 function Root() -- luacheck: ignore
-    return { ColorTheme = { ColorGroups = { Global = color_group } }, Symbols = symbols_pool }
+    return { ColorTheme = { ColorGroups = { Global = color_group } } }
 end
 
 -- ---------------------------------------------------------------------
@@ -245,17 +298,23 @@ assert(cells[2].Text == "S", "cell 2 should show speaker letter S, got " .. tost
 assert(cells[4].Text == "L", "cell 4 should show bulb letter L, got " .. tostring(cells[4].Text))
 print("PASS: cell symbols are plain letters and actually render (Text set)")
 
--- Pool icons (resolved via the fake FindTexture, matching only the LEAST
--- specific candidate -- proving the full fallback chain runs, not just the
--- first entry) must layer on TOP of the letter, never replace it -- the
--- letter is the guaranteed fallback if a real console can't resolve the
--- icon, so it must survive regardless.
-assert(cells[1].Texture == BULB_TEXTURE,
-    "cell 1 (bulb) should carry the fixture1.png icon (via fallback chain)")
+-- Icons are imported from the on-disk files into the Symbols pool and layered
+-- on TOP of the letter, never replacing it -- the letter is the guaranteed
+-- fallback if a real console can't resolve the icon, so it must survive.
+assert(#symbols_pool._children == 2,
+    "expected exactly 2 imported pool entries, got " .. #symbols_pool._children)
+local bulb_icon = symbols_pool:Find("TicTacToe_bulb")
+local speaker_icon = symbols_pool:Find("TicTacToe_speaker")
+assert(bulb_icon and speaker_icon, "imported entries must be renamed TicTacToe_bulb/_speaker")
+assert(import_log[1].dir == LIB .. "/object" and import_log[1].file == "fixture1.png.xml",
+    "bulb imported from wrong file: " .. import_log[1].dir .. "/" .. import_log[1].file)
+assert(import_log[2].dir == LIB .. "/executor"
+    and import_log[2].file == "executor_learnspeed.png.xml",
+    "speaker imported from wrong file: " .. import_log[2].dir .. "/" .. import_log[2].file)
+assert(cells[1].Texture == bulb_icon, "cell 1 (bulb) should carry the fixture1 icon")
 assert(cells[1].Text == "L", "icon assignment must not clear the letter fallback")
-assert(cells[2].Texture == SPEAKER_TEXTURE,
-    "cell 2 (speaker) should carry the executor_learnspeed.png icon (via fallback chain)")
-print("PASS: pool icons resolved and layered without clobbering the letter fallback")
+assert(cells[2].Texture == speaker_icon, "cell 2 (speaker) should carry the learnspeed icon")
+print("PASS: icon files imported once each and layered without clobbering the letters")
 
 -- Every stroke block must land on the board, on the winning column's centre.
 local expected_x = 0.5 * CELL_PX -- column 1 centre = 80
@@ -300,10 +359,19 @@ print("PASS: restart removed every stroke block")
 -- had a Texture written.
 for _, idx in ipairs({ 3, 6, 8, 9 }) do
     local cell = cells[idx]
-    assert(cell.Texture == nil,
-        "unplayed cell " .. idx .. " has a Texture -- black-grid regression")
+    assert(cell.Texture == DEFAULT_TEX,
+        "unplayed cell " .. idx .. " had its Texture changed -- black-grid regression")
 end
 print("PASS: never-played cells never have Texture touched (black-grid regression guard)")
+
+-- Played cells (1, 2, 4, 5, 7) must drop their icon on Restart, restored to
+-- the exact build-time default -- otherwise old icons haunt the new board.
+for _, idx in ipairs({ 1, 2, 4, 5, 7 }) do
+    assert(cells[idx].Texture == DEFAULT_TEX,
+        "played cell " .. idx .. " kept its icon after Restart")
+    assert(cells[idx].Text == "", "played cell " .. idx .. " kept its letter after Restart")
+end
+print("PASS: restart restores played cells to their default Texture")
 
 -- ---------------------------------------------------------------------
 -- Idempotent re-activation must not stack overlays
@@ -333,6 +401,13 @@ local stroke2 = #after2 - 11
 assert(stroke2 > 0, "speaker line did not trigger a rigged bulb win stroke")
 print("PASS: speaker 3-in-a-row ignored; bulb win stroke drawn (" .. stroke2 .. " blocks)")
 
+-- The second activation placed both players again: it must REUSE the named
+-- pool entries, never import a second copy into the show.
+assert(acquire_count == 2 and #symbols_pool._children == 2,
+    "re-activation imported again: acquires=" .. acquire_count ..
+    " pool entries=" .. #symbols_pool._children)
+print("PASS: re-activation reuses imported icons (no duplicate pool entries)")
+
 -- ---------------------------------------------------------------------
 -- SAFETY-CRITICAL: closing our dialog must NEVER touch another dialog
 -- sharing the same screen overlay. This is what the safety contract
@@ -351,6 +426,59 @@ assert(#overlay._children == 1, "close should remove exactly one dialog")
 assert(overlay._children[1] == other_dialog,
     "close deleted the WRONG dialog -- destroyed another plugin's window")
 print("PASS: closing our dialog never touches another dialog on the overlay")
+
+-- ---------------------------------------------------------------------
+-- Fallbacks: every failure mode must leave plain L/S letters and a clean pool
+-- ---------------------------------------------------------------------
+
+-- Fresh plugin instance on a fresh overlay + pool, under the current knobs.
+-- Plays bulb 1, speaker 2 and returns those two cell buttons.
+local function run_fresh_instance()
+    overlay = new_obj("ScreenOverlay")
+    symbols_pool = new_symbols_pool()
+    local fresh_signals = {}
+    local fresh_main = chunk("TicTacToe", "Main", fresh_signals, new_obj("PluginHandle"))
+    fresh_main()
+    fresh_signals["TttCell1"]()
+    fresh_signals["TttCell2"]()
+    local fresh_cells = {}
+    for _, btn in ipairs(children_of_class(overlay._children[1], "Button")) do
+        if btn.W == CELL_PX - 6 then
+            fresh_cells[#fresh_cells + 1] = btn
+        end
+    end
+    return fresh_cells[1], fresh_cells[2]
+end
+
+local function assert_letters_only(label)
+    local bulb_cell, speaker_cell = run_fresh_instance()
+    assert(bulb_cell.Text == "L" and speaker_cell.Text == "S", label .. ": letters missing")
+    assert(bulb_cell.Texture == DEFAULT_TEX and speaker_cell.Texture == DEFAULT_TEX,
+        label .. ": a cell Texture was changed without an icon")
+    assert(#symbols_pool._children == 0,
+        label .. ": pool left with " .. #symbols_pool._children .. " entries")
+    print("PASS: " .. label .. " -> plain L/S letters, pool untouched")
+end
+
+-- MA3 installed elsewhere / icon files absent.
+files_present = false
+local acquires_before = acquire_count
+assert_letters_only("icon files missing")
+assert(acquire_count == acquires_before, "missing files must never Acquire a pool slot")
+
+-- A resolvable root whose children aren't SymbolImage must never be written.
+files_present = true
+pool_child_class = "Sequence"
+acquires_before = acquire_count
+assert_letters_only("wrong-class pool")
+assert(acquire_count == acquires_before, "wrong-class pool must never receive an Acquire")
+
+-- Import() failing must remove the slot it just acquired.
+pool_child_class = "SymbolImage"
+import_succeeds = false
+acquires_before = acquire_count
+assert_letters_only("Import() failure")
+assert(acquire_count > acquires_before, "setup: the failed-import path should have run")
 
 print("")
 print("ALL UI GEOMETRY TESTS PASSED")

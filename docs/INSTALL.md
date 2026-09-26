@@ -74,10 +74,20 @@ docs/
 - **Restart** clears the board and the strike line.
 - Close the window with the title-bar close button or `Esc`.
 
-**Symbols.** The plugin prefers MA3 built-in icons. If none render clearly it
-falls back to the emoji glyphs 💡 (yellow) / 🔊 (blue); if the console font
-cannot render those, it drops to the colored letters `L` / `S`. All three
-degrade automatically -- no configuration.
+**Symbols.** Every mark always shows the letter `L` (Lightbulb) or `S`
+(Speaker). On top of that, the plugin tries to show MA3's own stock icons,
+read from the running version's install folder:
+
+```
+C:/ProgramData/MALightingTechnology/gma3_<version>/shared/resource/lib_symbols/object/fixture1.png
+C:/ProgramData/MALightingTechnology/gma3_<version>/shared/resource/lib_symbols/executor/executor_learnspeed.png
+```
+
+The first time they're needed, each icon is imported once into the show's
+Symbols pool as `TicTacToe_bulb` / `TicTacToe_speaker`. Later runs reuse those
+entries. If MA3 is installed elsewhere, a file (or its `.png.xml` sidecar) is
+missing, or the import fails, nothing is added to the show and the plain
+letters are used. No configuration needed.
 
 ---
 
@@ -116,7 +126,11 @@ segment when one is available.
 
 ## Safety notes (why this is console-safe)
 
-- **No show-data mutation.** There are zero `Cmd()` calls in the plugin.
+- **Minimal show-data mutation.** There are zero `Cmd()` calls in the plugin.
+  The only write to the show is the one-time import of the two icons into
+  the Symbols pool (see **Symbols** above). It only happens when the files
+  exist, only targets a collection of `SymbolImage` objects, and never adds a
+  second copy.
 - **No globals.** Every symbol is `local`; the plugin never writes `_G`.
 - **Callbacks are sandboxed.** Every click handler runs under `pcall`; a Lua
   error is swallowed and logged via `Printf`, never propagated into MA3's UI.
@@ -125,7 +139,8 @@ segment when one is available.
   on the screen overlay -- doing so would destroy other windows you have open.
 - **Idempotent.** Re-running closes any existing instance first, so overlays
   never stack.
-- **No timers, no file I/O, no network.**
+- **No timers, no network, no disk writes.** File access is limited to
+  `FileExists()` checks and reading the two icon files during import.
 
 ---
 
