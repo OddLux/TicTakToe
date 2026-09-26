@@ -27,7 +27,7 @@ placeholder name only; treat that as cosmetic, not a real ticket reference.
 | Win-line rendering + color | **Confirmed working on-console** (a diagonal win produced a visible colored line). |
 | Layout (grid vs title bar / close button) | **Believed fixed**, not independently re-confirmed after the `GRID_Y` bump to 64px. |
 | Restart clears the win line | **Confirmed working on-console, 2026-07-17.** No errors. Fixed by the `Children()` primary tier; see "Open bug 1 — RESOLVED" below for the full chain and one loose end. |
-| Pool icons (real bulb/speaker images instead of letters) | **Import confirmed working 2026-09-26. Drawing via AppearancePreview untested.** See "Open bug 2", steps 9-10. Cosmetic only; letters already work. |
+| Pool icons (real bulb/speaker images instead of letters) | **Confirmed working on-console, 2026-09-26** ("this version works"): file import plus `AppearancePreview` drawing. See "Open bug 2", steps 9-10. Cosmetic only; letters already work. |
 
 ## How it works
 
@@ -404,6 +404,14 @@ letters already work and are fully legible.
 ## Related
 
 - Main implementation: `plugin/TicTacToe.lua`
+- Classic (unrigged) sibling, added 2026-09-26: `plugin/TicTacToeClassic.lua`,
+  `.xml` and `test_classic_ui.lua`. It was derived from the working rigged
+  build: SECTION 1 is swapped for classic rules (X first, either player wins,
+  draw), and it uses X/O letters with the `lib_symbols/symbols/x_mark_black`
+  and `outline_circle_black` icons. It has its own `Ttc*` callbacks, dialog
+  name, `[TicTacToeClassic]` log prefix and `TicTacToeClassic_x/_o` pool
+  entries. **The two files share UI and icon code by copy, not by module.**
+  A fix to the shared parts (SECTIONS 3-11) usually needs applying to both.
 - Test harnesses: `plugin/test_logic.lua`, `plugin/test_ui_geometry.lua`
 - Packaging: `plugin/TicTacToe.xml`, `docs/INSTALL.md`
 - Ground truth API reference (user's machine, not in this repo):
