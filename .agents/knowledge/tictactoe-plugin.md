@@ -27,7 +27,7 @@ placeholder name only; treat that as cosmetic, not a real ticket reference.
 | Win-line rendering + color | **Confirmed working on-console** (a diagonal win produced a visible colored line). |
 | Layout (grid vs title bar / close button) | **Believed fixed**, not independently re-confirmed after the `GRID_Y` bump to 64px. |
 | Restart clears the win line | **Confirmed working on-console, 2026-07-17.** No errors. Fixed by the `Children()` primary tier; see "Open bug 1 — RESOLVED" below for the full chain and one loose end. |
-| Pool icons (real bulb/speaker images instead of letters) | **Reworked 2026-09-26, untested on console.** Now imported once from the stock files on disk. See "Open bug 2", step 9. Cosmetic only; letters already work. |
+| Pool icons (real bulb/speaker images instead of letters) | **Import confirmed working 2026-09-26. Drawing via AppearancePreview untested.** See "Open bug 2", steps 9-10. Cosmetic only; letters already work. |
 
 ## How it works
 
@@ -346,7 +346,24 @@ the intended lightbulb/speaker pool images.
    Known risk: `gma3_2.3.2` has the pngs but **no** `.png.xml` sidecars, so a
    2.3.2 console gets letters only.
 
-**Next step if step 9 still does not show icons** (older note, still applies): this is now 8 distinct approaches
+10. **On-console result of step 9 (2026-09-26):** the import **worked**. The log
+   showed `icons: imported fixture1.png.xml as TicTacToe_bulb` (and the same
+   for the speaker), and Symbols pool slots 44/45 held the right images. The
+   second activation reused them without re-importing. But every cell given
+   `Texture = <SymbolImage>` lost its grey background and drew no image. MA's
+   own `lib_menus` Lua explains why: `Texture` is a widget's **background
+   frame** (`"corner1"`, `TextureCollect.Textures["frame15"]`), `Icon` takes
+   internal UI texture names (`"triangle_left"`), and a **pool image is shown
+   via `AppearancePreview.Appearance = <image object>`** (`image_editor.lua`).
+   The fix is a lazily created `AppearancePreview` over each occupied cell,
+   hidden and shrunk to 0x0 on clear. It is untested on-console. **Never write
+   `Texture` for icons again.** That same background-frame meaning is also
+   the real cause of the 2026-07-17 black-grid bug (`Texture = ""`).
+   **Lesson: grep `gma3_<ver>/shared/resource/lib_menus` (MA's own shipped UI
+   Lua + uixml) before guessing any UI property. It's local ground truth and
+   more useful than the HelpLua dump for UI questions.**
+
+**Next step if step 10 still does not show icons** (older note, still applies): this is now 8 distinct approaches
 across 3 rounds, all misses, with the flat-index forms proven wrong by two
 separate lines of evidence (10 silent misses, plus the console's own
 `2.38` addressing). If the page-qualified forms ALSO miss, that points at

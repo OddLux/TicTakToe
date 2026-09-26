@@ -20,8 +20,9 @@
 -- Fake MA3 object model
 -- ---------------------------------------------------------------------
 
--- Stand-in for whatever Texture value a fresh MA3 Button carries. clear_symbol
--- must restore exactly this after Restart, and never write anything else.
+-- Stand-in for whatever Texture value a fresh MA3 Button carries. Texture is
+-- a widget's BACKGROUND frame on MA3; the plugin must never write it at all
+-- (on-console 2026-09-26: an image handle there blanked the cell).
 local DEFAULT_TEX = "default_button_texture"
 
 local function new_obj(class)
@@ -311,10 +312,39 @@ assert(import_log[1].dir == LIB .. "/object" and import_log[1].file == "fixture1
 assert(import_log[2].dir == LIB .. "/executor"
     and import_log[2].file == "executor_learnspeed.png.xml",
     "speaker imported from wrong file: " .. import_log[2].dir .. "/" .. import_log[2].file)
-assert(cells[1].Texture == bulb_icon, "cell 1 (bulb) should carry the fixture1 icon")
 assert(cells[1].Text == "L", "icon assignment must not clear the letter fallback")
-assert(cells[2].Texture == speaker_icon, "cell 2 (speaker) should carry the learnspeed icon")
-print("PASS: icon files imported once each and layered without clobbering the letters")
+print("PASS: icon files imported once each; letters still set underneath")
+
+-- Icons are drawn by one AppearancePreview per occupied cell (the widget MA's
+-- own image editor uses), laid inside that cell -- never via cell.Texture.
+local function preview_at(idx)
+    local cx = ((idx - 1) % 3) * CELL_PX
+    local cy = math.floor((idx - 1) / 3) * CELL_PX + GRID_Y
+    for _, prv in ipairs(children_of_class(dialog, "AppearancePreview")) do
+        if prv.X ~= nil and prv.X > cx and prv.X < cx + CELL_PX
+            and prv.Y > cy and prv.Y < cy + CELL_PX then
+            return prv
+        end
+    end
+    return nil
+end
+local previews = children_of_class(dialog, "AppearancePreview")
+assert(#previews == 5, "expected 5 previews (one per played cell), got " .. #previews)
+for _, idx in ipairs({ 1, 4, 7 }) do
+    local prv = preview_at(idx)
+    assert(prv and prv.Appearance == bulb_icon and prv.Visible == true,
+        "cell " .. idx .. " should show the bulb icon via AppearancePreview")
+    assert(prv.X + prv.W <= ((idx - 1) % 3 + 1) * CELL_PX, "preview escapes its cell")
+end
+for _, idx in ipairs({ 2, 5 }) do
+    local prv = preview_at(idx)
+    assert(prv and prv.Appearance == speaker_icon and prv.Visible == true,
+        "cell " .. idx .. " should show the speaker icon via AppearancePreview")
+end
+for idx = 1, 9 do
+    assert(cells[idx].Texture == DEFAULT_TEX, "cell " .. idx .. " Texture was written")
+end
+print("PASS: icons drawn via per-cell AppearancePreview; no cell Texture ever written")
 
 -- Every stroke block must land on the board, on the winning column's centre.
 local expected_x = 0.5 * CELL_PX -- column 1 centre = 80
@@ -364,14 +394,18 @@ for _, idx in ipairs({ 3, 6, 8, 9 }) do
 end
 print("PASS: never-played cells never have Texture touched (black-grid regression guard)")
 
--- Played cells (1, 2, 4, 5, 7) must drop their icon on Restart, restored to
--- the exact build-time default -- otherwise old icons haunt the new board.
+-- Played cells (1, 2, 4, 5, 7) must drop their icon on Restart -- otherwise
+-- old icons haunt the new board. Hidden previews are also shrunk to 0x0 so
+-- they can never swallow a click on the now-empty cell underneath.
+for _, prv in ipairs(children_of_class(dialog, "AppearancePreview")) do
+    assert(prv.Visible == false and prv.Appearance == nil,
+        "a preview still shows an icon after Restart")
+    assert(prv.W == 0 and prv.H == 0, "a hidden preview still covers its cell")
+end
 for _, idx in ipairs({ 1, 2, 4, 5, 7 }) do
-    assert(cells[idx].Texture == DEFAULT_TEX,
-        "played cell " .. idx .. " kept its icon after Restart")
     assert(cells[idx].Text == "", "played cell " .. idx .. " kept its letter after Restart")
 end
-print("PASS: restart restores played cells to their default Texture")
+print("PASS: restart hides every icon preview and leaves cells clickable")
 
 -- ---------------------------------------------------------------------
 -- Idempotent re-activation must not stack overlays
@@ -455,6 +489,8 @@ local function assert_letters_only(label)
     assert(bulb_cell.Text == "L" and speaker_cell.Text == "S", label .. ": letters missing")
     assert(bulb_cell.Texture == DEFAULT_TEX and speaker_cell.Texture == DEFAULT_TEX,
         label .. ": a cell Texture was changed without an icon")
+    assert(#children_of_class(overlay._children[1], "AppearancePreview") == 0,
+        label .. ": an icon preview was created without an icon")
     assert(#symbols_pool._children == 0,
         label .. ": pool left with " .. #symbols_pool._children .. " entries")
     print("PASS: " .. label .. " -> plain L/S letters, pool untouched")

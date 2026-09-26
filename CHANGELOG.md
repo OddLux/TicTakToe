@@ -19,9 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gated on both the `.png` and `.png.xml` existing and on the target
   collection's `GetChildClass()` being `SymbolImage`. A failed import removes
   the slot it acquired. The `L`/`S` letters stay the baseline, and are all
-  that shows when MA3 lives elsewhere or the files are missing. Restart now
-  restores each played cell's build-time default `Texture`, so icons no longer
-  carry over into a new game. Untested on-console.
+  that shows when MA3 lives elsewhere or the files are missing. Import
+  confirmed on-console (2026-09-26): pool slots 44/45 show the right images.
+  Icons are drawn with an `AppearancePreview` laid over each occupied cell
+  (`.Appearance = <SymbolImage>`), which is how MA's own image editor shows
+  pool images. Writing the image to the cell's `Texture` (the first attempt)
+  blanked the cell, because `Texture` is the widget's background frame. The
+  plugin never writes `Texture` now. Restart hides each preview and shrinks
+  it to 0x0 so it can't block clicks. Preview rendering is untested on-console.
 
 ### Fixed
 
