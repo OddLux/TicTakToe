@@ -59,6 +59,39 @@ added to the show and the plain `X` / `O` letters are used.
 Test it headless:
 `uv run --with lupa python -c "from lupa import LuaRuntime; LuaRuntime().execute(open('plugin/test_classic_ui.lua').read())"`
 
+### macOS variants (`TicTacToeMac`, `TicTacToeClassicMac`)
+
+The plugins above look for their icons under the fixed Windows folder
+`C:/ProgramData/MALightingTechnology`, so on a Mac they show letters only.
+The Mac variants play exactly the same games but find the icon folder the way
+MA's own menus do, by asking MA for it (`GetPath(Enums.PathType.Resource)`).
+If that fails they try `~/MALightingTechnology`,
+`/Library/Application Support/MALightingTechnology` and the Windows folder, in
+that order. They also work on Windows.
+
+```
+plugin/
+  TicTacToeMac.lua / .xml          -- rigged, macOS
+  TicTacToeClassicMac.lua / .xml   -- classic, macOS
+  test_mac_ui_geometry.lua         -- rigged test, mocked Mac GetPath()
+  test_mac_classic_ui.lua          -- classic test, mocked Mac GetPath()
+```
+
+Install them like the others, using the `...Mac.xml` + `...Mac.lua` pairs.
+They use their own dialog, callbacks and Symbols pool entries
+(`TicTacToeMac_bulb` / `_speaker`, `TicTacToeClassicMac_x` / `_o`), so they
+never touch the Windows plugins, even in the same show.
+
+On first run the log shows which folder was used (`icons: using <path>`). If
+no folder holds the pngs, the log lists every path tried and the letters are
+shown. **Untested on a real Mac.** If the icon folder can't be written to (for
+example, if it's inside the app bundle), the missing `.png.xml` can't be
+created and you get letters.
+
+These files are **generated**. Don't edit them by hand. Change
+`TicTacToe.lua` / `TicTacToeClassic.lua` (or their tests), then run:
+`uv run python scripts/make_mac_variants.py`
+
 ---
 
 ## Install into the Plugins pool
