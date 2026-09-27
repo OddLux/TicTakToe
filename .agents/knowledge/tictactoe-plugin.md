@@ -101,8 +101,8 @@ every stroke strategy fails).
   Each icon is imported at most once per show into a collection whose
   `GetChildClass()` is `SymbolImage`, named `TicTacToe_bulb` /
   `TicTacToe_speaker`, and found by name on every later activation. It only
-  runs if both the `.png` and `.png.xml` exist, and a failed import removes
-  its slot. Don't widen this exception. Everything else stays read-only.
+  runs if the `.png` exists. A missing `.png.xml` sidecar is written once,
+  byte-identical to MA's own (see step 11). A failed import removes its slot. Don't widen this exception. Everything else stays read-only.
 - **Idempotent activation.** Re-running the plugin tears down any prior
   instance first; never stacks duplicate overlays.
 
@@ -362,6 +362,22 @@ the intended lightbulb/speaker pool images.
    **Lesson: grep `gma3_<ver>/shared/resource/lib_menus` (MA's own shipped UI
    Lua + uixml) before guessing any UI property. It's local ground truth and
    more useful than the HelpLua dump for UI questions.**
+
+11. **Second PC (2026-09-27): "(or its .xml) not found".** The pngs were
+   there, but the `.png.xml` sidecars were not. **MA3 does not ship
+   sidecars.** On the dev PC they're dated 2026-07-17 00:17, while the pngs
+   are dated with the install. The Import Image dialog
+   (`lib_menus/ui/editors/image_import.lua`) runs
+   `Cmd("Import Image ... /File <png> /Path <dir>")` on the bare png, and MA
+   writes the sidecar as a cache the first time. Our `obj:Import(dir, xml)`
+   skips that step. Fix (user-approved): when the png exists and the sidecar
+   doesn't, write it once with `io.open`, using MA's exact bytes (UTF-8 BOM,
+   `<GMA3 DataVersion="<Version()>">`, a 4-space-indented `<SymbolImage
+   FileName=.. FilePath=<subdir>/>`, LF endings). All 4 generated files were
+   verified byte-identical to the real ones on the dev PC. Untested on the
+   second PC. **Lesson: a file that exists on the dev machine might be one
+   that the dev's own clicking created. Check file dates against the
+   install date before assuming it's stock.**
 
 **Next step if step 10 still does not show icons** (older note, still applies): this is now 8 distinct approaches
 across 3 rounds, all misses, with the flat-index forms proven wrong by two

@@ -52,8 +52,9 @@ C:/ProgramData/MALightingTechnology/gma3_<version>/shared/resource/lib_symbols/s
 
 They're imported once into the Symbols pool as `TicTacToeClassic_x` /
 `TicTacToeClassic_o` and reused on later runs. Same rules as the rigged
-plugin: if the files (or their `.png.xml` sidecars) are missing, or the import
-fails, nothing is added to the show and the plain `X` / `O` letters are used.
+plugin: a missing `.png.xml` sidecar is written once next to its png; if the
+pngs are missing, the sidecar can't be written, or the import fails, nothing is
+added to the show and the plain `X` / `O` letters are used.
 
 Test it headless:
 `uv run --with lupa python -c "from lupa import LuaRuntime; LuaRuntime().execute(open('plugin/test_classic_ui.lua').read())"`
@@ -116,9 +117,11 @@ C:/ProgramData/MALightingTechnology/gma3_<version>/shared/resource/lib_symbols/e
 
 The first time they're needed, each icon is imported once into the show's
 Symbols pool as `TicTacToe_bulb` / `TicTacToe_speaker`. Later runs reuse those
-entries. If MA3 is installed elsewhere, a file (or its `.png.xml` sidecar) is
-missing, or the import fails, nothing is added to the show and the plain
-letters are used. No configuration needed.
+entries. Stock MA3 installs don't include the `.png.xml` sidecar that the
+import reads, so the plugin writes a missing one once, in MA's own format,
+next to the png. If MA3 is installed elsewhere, a png is missing, the sidecar
+can't be written, or the import fails, nothing is added to the show and the
+plain letters are used. No configuration needed.
 
 ---
 

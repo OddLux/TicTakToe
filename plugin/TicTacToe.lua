@@ -16,8 +16,9 @@
 --     teardown. We deliberately DO NOT call ClearUIChildren() on the screen
 --     overlay (that would destroy other dialogs the user has open).
 --   * Activation is idempotent: re-running closes any existing instance first.
---   * No timers, no network. File access is limited to FileExists() checks
---     and the icon Import() in SECTION 4; nothing is ever written to disk.
+--   * No timers, no network. File access is limited to FileExists() checks,
+--     the icon Import() in SECTION 4, and -- only when missing -- writing
+--     the icon's 4-line .png.xml sidecar next to its stock png (SECTION 4).
 --
 -- Plugin entry signature (file-scope varargs). These are community-documented
 -- for MA3 2.x and are NOT verified against a specific install; nothing below
@@ -561,8 +562,14 @@ end
 -- pool lookups) all missed, so the user explicitly relaxed the safety
 -- contract for this ONE case: a one-time Import() into the show's Symbols
 -- pool. Bounds on that exception:
---   * Only when both the .png and its .png.xml sidecar exist on disk
---     (Import() reads the XML object description, which points at the png).
+--   * Only when the .png exists on disk. Import() reads its .png.xml
+--     sidecar (the XML object description, which points at the png), but
+--     stock installs do NOT ship sidecars: MA's own Import Image dialog
+--     (lib_menus/ui/editors/image_import.lua) writes one the first time a
+--     png is imported by hand. The dev machine only had them because of a
+--     manual import on 2026-07-16; a fresh PC showed "not found" (2026-09-27).
+--     So a missing sidecar is written once, byte-for-byte in MA's own format
+--     (BOM, DataVersion = Version()). An existing sidecar is never touched.
 --   * Only into a collection whose GetChildClass() is "SymbolImage" -- a
 --     wrong root path can never receive an Acquire().
 --   * Idempotent across activations: imported entries are named
@@ -626,7 +633,28 @@ local function file_exists(path)
     return ok and found == true
 end
 
--- Return dir, xml_name for a player's icon, or nil if either file is missing.
+-- Write the .png.xml sidecar MA's Import Image dialog would create for `spec`.
+-- Returns true on success. Only called when the sidecar is missing.
+local function write_sidecar(xml_path, spec)
+    local ok, err = pcall(function()
+        local handle = assert(io.open(xml_path, "wb"))
+        handle:write("\239\187\191<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<GMA3 DataVersion=\"", tostring(Version()), "\">\n",
+            "    <SymbolImage FileName=\"", spec.file, "\" FilePath=\"",
+            spec.subdir, "\"/>\n",
+            "</GMA3>\n")
+        handle:close()
+    end)
+    if not ok then
+        diag("icons: could not write " .. xml_path .. ": " .. tostring(err))
+        return false
+    end
+    diag("icons: wrote missing sidecar " .. xml_path)
+    return true
+end
+
+-- Return dir, xml_name for a player's icon, or nil if the png is missing or
+-- its sidecar is missing and can't be written.
 local function find_icon_file(player)
     local base = lib_symbols_dir()
     if base == nil then
@@ -636,8 +664,12 @@ local function find_icon_file(player)
     local dir = base .. "/" .. spec.subdir
     local png = dir .. "/" .. spec.file
     local xml_name = spec.file .. ".xml"
-    if not file_exists(png) or not file_exists(dir .. "/" .. xml_name) then
-        diag("icons: " .. png .. " (or its .xml) not found -- using letters")
+    if not file_exists(png) then
+        diag("icons: " .. png .. " not found -- using letters")
+        return nil
+    end
+    local xml_path = dir .. "/" .. xml_name
+    if not file_exists(xml_path) and not write_sidecar(xml_path, spec) then
         return nil
     end
     return dir, xml_name
