@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Icons now work on a fresh MA3 install. Both plugins used to fall back to
+  letters with `icons: ... (or its .xml) not found`, because they needed a
+  `.png.xml` sidecar next to each stock png. MA3 doesn't ship those files.
+  MA's own Import Image dialog writes one the first time a png is imported
+  by hand, and the dev PC only had them from a manual import on 2026-07-16.
+  When the png exists and its sidecar is missing, the plugin now writes the
+  sidecar once, byte-identical to MA's own (BOM, `DataVersion` =
+  `Version()`), then imports as before. An existing sidecar is never
+  touched. If the write fails, the plugin still shows the letters.
+
 - Restart now clears the win-line stroke blocks -- confirmed working
   on-console (2026-07-17), no errors. Root cause was the `GetUIChildrenCount`
   and `Children()` fixes from prior rounds; this round additionally

@@ -135,6 +135,34 @@ function FileExists(path) -- luacheck: ignore
     return files_present and KNOWN_FILES[path] == true
 end
 
+-- Stock installs ship only the pngs (2026-09-27); the plugin writes a missing
+-- .png.xml itself. Writes under LIB are captured here, never hit the disk, and
+-- make the file "exist" on close. sidecar_write_fails simulates a read-only
+-- install directory.
+local sidecar_write_fails = false
+local written_sidecars = {}
+local real_io_open = io.open
+io.open = function(path, mode) -- luacheck: ignore
+    if path:sub(1, #LIB) ~= LIB then
+        return real_io_open(path, mode)
+    end
+    if sidecar_write_fails then
+        return nil, path .. ": Permission denied"
+    end
+    local parts = {}
+    return {
+        write = function(_, ...)
+            for _, piece in ipairs({ ... }) do
+                parts[#parts + 1] = piece
+            end
+        end,
+        close = function()
+            written_sidecars[path] = table.concat(parts)
+            KNOWN_FILES[path] = true
+        end,
+    }
+end
+
 local function new_symbols_pool()
     local pool = new_obj("Symbols")
     pool.GetChildClass = function()
@@ -543,6 +571,35 @@ import_succeeds = false
 acquires_before = acquire_count
 assert_letters_only("Import() failure")
 assert(acquire_count > acquires_before, "setup: the failed-import path should have run")
+
+-- Existing sidecars (every case above) must never be rewritten.
+assert(next(written_sidecars) == nil, "an existing sidecar was rewritten")
+
+-- Fresh install: pngs present, no .png.xml sidecars (the 2026-09-27 bug). The
+-- plugin must write MA's own sidecar format once, then import the icons.
+import_succeeds = true
+KNOWN_FILES[LIB .. "/symbols/x_mark_black.png.xml"] = nil
+KNOWN_FILES[LIB .. "/symbols/outline_circle_black.png.xml"] = nil
+run_fresh_instance()
+local expected_xml = "\239\187\191<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    .. "<GMA3 DataVersion=\"2.4.2.2\">\n"
+    .. "    <SymbolImage FileName=\"x_mark_black.png\" FilePath=\"symbols\"/>\n"
+    .. "</GMA3>\n"
+assert(written_sidecars[LIB .. "/symbols/x_mark_black.png.xml"] == expected_xml,
+    "sidecar content differs from MA's format: " .. tostring(written_sidecars[LIB .. "/symbols/x_mark_black.png.xml"]))
+assert(written_sidecars[LIB .. "/symbols/outline_circle_black.png.xml"] ~= nil, "second sidecar was not written")
+assert(#symbols_pool._children == 2,
+    "icons not imported after writing sidecars: " .. #symbols_pool._children)
+print("PASS: missing sidecars written in MA's format, icons imported")
+
+-- Sidecar missing and the directory is not writable: letters, no Acquire.
+KNOWN_FILES[LIB .. "/symbols/x_mark_black.png.xml"] = nil
+KNOWN_FILES[LIB .. "/symbols/outline_circle_black.png.xml"] = nil
+sidecar_write_fails = true
+acquires_before = acquire_count
+assert_letters_only("sidecar write failure")
+assert(acquire_count == acquires_before, "unwritable sidecar must never Acquire a pool slot")
+sidecar_write_fails = false
 
 -- ---------------------------------------------------------------------
 -- Exhaustive rules check on the plugin's REAL SECTION 1 (not a mirror):
