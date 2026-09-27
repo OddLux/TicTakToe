@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TicTacToeMac.xml -- grandMA3 2.x Plugins-pool wrapper for the rigged
+  Tic Tac Toe game. References the external TicTacToe.lua sitting beside it.
+
+  DataVersion and the Guid below are best-effort and NOT verified against a
+  specific MA3 build. If import warns on the DataVersion, set it to match your
+  console's build (Help > About, or an existing pool export). If MA3 rejects
+  or reassigns the Guid on import, that is harmless -- it will mint its own.
+-->
+<GMA3 DataVersion="2.1.0.0">
+    <Plugin Name="TicTacToeMac" Guid="4D6A0C11 7E2B9F35">
+        <ComponentLua Name="Main" FileName="TicTacToeMac.lua"/>
+    </Plugin>
+</GMA3>
